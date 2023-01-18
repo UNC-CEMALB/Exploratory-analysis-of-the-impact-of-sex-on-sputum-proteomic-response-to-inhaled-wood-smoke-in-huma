@@ -1,0 +1,224 @@
+```
+setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
+Output = ("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output")
+
+library(readxl)
+library(tidyverse)
+library(reshape2)
+
+
+#reading in file
+proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
+
+```
+
+```{r}
+head(proteomics_df)
+
+```
+
+```{r}
+proteomics_df = proteomics_df %>%
+    # just want a column that specifies the treatment and exposure separately
+  separate(Subject_ID, c("R_NR", "ID"), sep = "_") %>%   
+  separate(Sample_ID, c("pre_post", "ID_2"), sep = "_") 
+  
+
+head(proteomics_df)
+
+```
+
+
+T-tests comparing mean imputed_norm_intensity of each protein from 'pre' and post' exposures
+```{r pre vs post}
+proteins <- unique(proteomics_df$Protein_Accession)
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+
+ttest_pre.post <- data.frame()
+#create an empty dataframe for the loop function to place values into
+
+for (i in 1:length(proteins)) {
+  #head of for loop  defines a collection of objects such as the elements of a vector or a list
+  
+  #we are specifying within the head of the for-loop that we want to run through a vector      containing elements from the first element [1], through the entire length of the proteins vector
+    
+  filtered <- proteomics_df %>%
+  filter(Protein_Accession == proteins[i])
+#make a new data frame that looks within the proteomics_df and the filter function will retain all rows that satisfy the conditions when the Protein_Accession variable is the same as the variable from the proteins list.
+  #The i in proteins[i] is specify that the loop filters through this filter step through the entirety of the proteins list
+  
+  pre <- filtered %>%
+    filter(pre_post == "Pre") %>%
+    rename("Intensity_Pre" = "Imputed_Norm_Intensity")
+  
+#Now we will make another data frame, we will filter for rows from the 'filtered' df when the pre_post variable is "Pre"
+  #In this step, we also want to specify that the intensity values from this new 'Pre' filtered data frame are 'pre'... so we will rename the Intensity column in this df to 'Intesity_Pre'
+  
+  post <- filtered %>%
+    filter(pre_post == "Post") %>%
+    rename("Intensity_Post" = "Imputed_Norm_Intensity") %>%
+    select(ID, Intensity_Post)
+  
+  
+  pre_and_post <- pre %>%
+    right_join(post, by = "ID")
+  
+  head(pre_and_post)
+  
+#Now that the intensity has been filtered and renamed for either pre or post values, we will join these data frames together using right_join() To include all the rows of data frame 'pre' and only those from 'post' that match by "ID", specify y=TRUE.
+    
+#making a df for columns related to information about the proteins
+   protein_info <- filtered %>% 
+     select(Protein_Accession, Protein_Name, Protein_Descriptions)
+     
+   protein_info <- protein_info[!duplicated(protein_info), ]
+   
+#I only need one row of description for each protein, so I deleted the duplicate rows
+  
+   head(protein_info)
+
+  ttes_res <- t.test(pre_and_post$Intensity_Pre, pre_and_post$Intensity_Post, paired = TRUE)
+#from our new pre_and_post data frame, we can finally do t-tests because the pre and post values are stratified.
+  #The t.test function generates a long and informative list, we can subset for specific information from this list by setting it as a ttes_res object and selecting for values like p.value
+
+  pval <- ttes_res$p.value
+  #pval object is a list that selects for the p.values generated from the ttes_res object
+  
+  Protein_Accession <- proteins[i] 
+   
+  res <- data.frame(pval, Protein_Accession)
+  
+  #This new object 'res' will be a data frame that contains the list object 'pval' where the Protein_Accession for this data frame will be from the entire characterized vector 'proteins'
+  
+  res2 <- merge(res, protein_info, by = "Protein_Accession") 
+#Let's join our res data frame with the protein_info data frame     
+  
+  head(res2)
+  
+  ttest_pre.post <- rbind(ttest_pre.post, res2)
+#Lastly, we will merge the res2 data frame with our empty data frame "ttest_pre.post" that we made before starting the loop
+ 
+  
+}
+
+ttest_pre.post$p.adj <- p.adjust(ttest_pre.post$pval, method = "BH")
+
+ttest_pre.post <-  ttest_pre.post[,c(2, 5, 1, 3, 4)]
+
+write.csv(ttest_pre.post,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/ttest_pre.post.csv")
+
+```
+
+Let's filter ttest_pre.post for p-values <0.05 
+```{r pre vs post, significant results}
+ttest_pre.post_sig <- ttest_pre.post %>% 
+  filter(pval < 0.05)
+
+head(ttest_pre.post_sig)
+
+pre.post_sig_names <- select(ttest_pre.post_sig, "Protein_Name")
+
+write.csv(pre.post_sig_names,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/pre.post_sig_names.csv")
+
+
+```
+
+
+Let's find the mean difference between Post - Pre and then run t-tests based on R and NR subjects
+```{r post-pre, R vs NR}
+proteins <- unique(proteomics_df$Protein_Accession)
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+
+ttest_R.NR <- data.frame()
+#create an empty dataframe for the loop function to place values into
+
+for (i in 1:length(proteins)) {
+
+    
+  filtered <- proteomics_df %>%
+  filter(Protein_Accession == proteins[i])
+#make a new data frame that looks within the proteomics_df and the filter function will retain all rows that satisfy the conditions when the Protein_Accession variable is the same as the variable from the proteins list.
+
+  pre <- filtered %>%
+    filter(pre_post == "Pre") %>%
+    rename("Intensity_Pre" = "Imputed_Norm_Intensity")
+  
+#Now we will make another data frame, we will filter for rows from the 'filtered' df when the pre_post variable is "Pre"
+  #In this step, we also want to specify that the intensity values from this new 'Pre' filtered data frame are 'pre'... so we will rename the Imputed_Norm_Intensity column in this df to 'Intesity_Pre'
+  
+  post <- filtered %>%
+    filter(pre_post == "Post") %>%
+    rename("Intensity_Post" = "Imputed_Norm_Intensity") %>%
+    select(ID, Intensity_Post)
+  
+  pre_and_post <- pre %>%
+    right_join(post, by = "ID") 
+  
+  pre_and_post$post_minus_pre <- (pre_and_post$Intensity_Post -   pre_and_post$Intensity_Pre)
+
+  head(pre_and_post)
+  
+  #This new column will give us the difference between post and intensity values. We want to do t-tests based on the mean difference of pre and post values when stratified by R or NRs in the later steps.
+  
+  R.NR_filtered <- pre_and_post %>% 
+  select("Protein_Accession", "R_NR", "ID", "post_minus_pre")
+
+  R <- R.NR_filtered %>% 
+  filter(R_NR == "R") %>% 
+  rename("R_post_minus_pre" = "post_minus_pre")
+  
+  NR <- R.NR_filtered %>% 
+  filter(R_NR == "NR") %>% 
+  rename("NR_post_minus_pre" = "post_minus_pre") 
+  
+  protein_info <- filtered %>% 
+     select(Protein_Accession, Protein_Name, Protein_Descriptions)
+     
+  protein_info <- protein_info[!duplicated(protein_info), ]
+  
+  head(protein_info)
+  
+#we only need one lines of the protein info data frame so I am deleting the duplicate rows
+  
+  ttes_res <- t.test(R$R_post_minus_pre, NR$NR_post_minus_pre, paired = FALSE)
+#We are doing t-tests on the mean differences of Post and pre vlaues when stratefied by R and NR. These t-tests will NOT be paired because subjects are either R or NR.
+  
+  pval <- ttes_res$p.value
+  #pval object is a list that selects for the p.values generated from the ttes_res object
+  
+  Protein_Accession <- proteins[i]
+  #Make a df merging the p-values and the Protein Accession #s
+  
+  res <- data.frame(pval, Protein_Accession)
+#This new object 'res' will be a data frame that contains the list object 'pval' where the row.names for this data frame will be from the entire characterized vector 'proteins'
+   
+  res2 <- merge(res, protein_info, by = "Protein_Accession") 
+
+  head(res2)
+  
+  ttest_R.NR <- rbind(ttest_R.NR, res2)
+#Lastly, we will combine our res2 data frame into the empty data frame "ttest_R.NR" that we made before starting the loop 
+  
+}
+
+ttest_R.NR$p.adj <- p.adjust(ttest_R.NR$pval, method = "BH")
+
+ttest_R.NR <-  ttest_R.NR[,c(2, 5, 1, 3, 4)]
+
+write.csv(ttest_R.NR,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/ttest_R.NR.csv")
+
+```
+
+Let's filter ttest_R.NR for p-values <0.05 
+```{r post-pre, R vs NR: significant results}
+ttest_R.NR_sig <- ttest_R.NR %>% 
+  filter(pval < 0.05)
+
+head(ttest_R.NR_sig)
+
+ttest_R.NR_sig_names <- select(ttest_R.NR_sig, "Protein_Name")
+
+write.csv(ttest_R.NR_sig_names, "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/ttest_R.NR_sig_names.csv")
+
+
+```
