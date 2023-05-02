@@ -1,0 +1,207 @@
+#Regression Analysis
+
+```{r}
+setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
+Output = ("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output")
+
+library(readxl)
+library(tidyverse)
+library(reshape2)
+library(rstatix)
+library(jtools)
+library(stringr)
+library(interactions)
+library(sgof)
+
+#reading in file
+proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
+```
+
+
+Let's add some demographics data to use later in our analysis
+```{r}
+Demo <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/Subject_Info_113022_Copy.xlsx")
+
+GSTM1 <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/GSTM1_status.xlsx", sheet = "R_data")
+
+#First, let's remove the unneeded cols from the Demo df and rename the Subject_Number to ID in order to more easily merge this df to the other dfs
+
+Demo <- Demo %>% 
+  rename("ID" = "Subject_Number")
+
+#Let's just get sex and ID variables from the Demo df to add to our proteomics_df
+Sex <- Demo %>% 
+  select(c(ID, Sex))
+
+proteomics_df = proteomics_df %>%
+  separate(Subject_ID, c("Responder_Status", "ID"), sep = "_") %>%   
+  separate(Sample_ID, c("Pre_Post", NA), sep = "_") %>% 
+  separate(Protein_Name, c("Protein_Name", NA), sep = "_")  
+
+data <- merge(proteomics_df, Sex, by = "ID")
+data <- merge(data, GSTM1, by = "ID")
+
+#let's log2 transform our data before our analysis
+data$Log2_Intensity <- log2(data$Intensity)
+
+```
+
+
+Now I will reorganize the data df into more usable formats and change the R/NR and M/F IDs into numbers - this allows the regression function to work properly
+```{r}
+
+#I will isolate only the variables I want
+data_long <- data %>% 
+   select(c(ID, Responder_Status, Sex, Pre_Post, Log2_Intensity, Protein_Name, GSTM1_Status))
+
+data_wide <- data_long %>% 
+  pivot_wider(
+    names_from = Pre_Post,
+    values_from = Log2_Intensity)
+
+#Now I will make new columns for the binomials
+data_wide$Responder_Status_num <- 
+  case_when(
+    data_wide$Responder_Status == "NR"  ~ 0,
+    data_wide$Responder_Status == "R"  ~ 1)
+
+data_wide$Sex_num <- 
+  case_when(
+    data_wide$Sex == "F"  ~ 0,
+    data_wide$Sex == "M"  ~ 1)
+
+data_wide <- data_wide %>% 
+  rename("GSTM1" = "GSTM1_Status")
+
+#Note: GSTM1_Status is already in numeric where: 
+#GSTM1 sufficient = 1, GSTM1 null = 2
+
+```
+
+#Now I will use a loop function to run regressions. My goal is to determine what effect baseline (Pre) protein expression has on protein response (Post).
+#R/NR status, GSTM1 genotype, and sex differenced will be assessed as interactions. They will be disaggregated in this code chunk, but I will assess fors 
+#multiple interactions in a later code chunk
+
+
+```{r}
+
+proteins <- unique(data_wide$Protein_Name)
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+
+#Making empty data frames to put my results into
+Baseline <- data.frame()
+Base_Int_R.NR <- data.frame()
+Base_Int_Sex <- data.frame()
+Base_Int_GSTM1 <- data.frame()
+
+for (i in 1:length(proteins)) {
+  #head of for loop  defines a collection of objects such as the elements of a vector or a list
+    
+  data_wide_filtered <- data_wide %>%
+  filter(Protein_Name == proteins[i])
+#make a new data frame that looks within the data_wide and the filter function will retain all rows that satisfy the conditions when the Protein_Name 
+#variable is the same as the variable from the proteins list.
+    
+  
+#Here are the regressions
+  Reg_1 <- lm(Post ~ Pre, data = data_wide_filtered)
+  Reg_2 <- lm(Post ~ Pre * Responder_Status_num, data = data_wide_filtered)
+  Reg_3 <- lm(Post ~ Pre * Sex_num, data = data_wide_filtered)
+  Reg_4 <- lm(Post ~ Pre * GSTM1, data = data_wide_filtered)
+
+#I am extracting the p values from the regression summaries
+  Pval_1 <- summary(Reg_1)$coefficients[,4] 
+  Pval_2 <- summary(Reg_2)$coefficients[,4]
+  Pval_3 <- summary(Reg_3)$coefficients[,4]
+  Pval_4 <- summary(Reg_4)$coefficients[,4]
+
+#I am extracting the adjusted R squared value from the reggression summaries
+  R2_1 <- summary(Reg_1)$adj.r.squared
+  R2_2 <- summary(Reg_2)$adj.r.squared
+  R2_3 <- summary(Reg_3)$adj.r.squared
+  R2_4 <- summary(Reg_4)$adj.r.squared
+
+#I will need an identifier attached to my regression data, I will use the protein name
+  Protein_Name <- proteins[i] 
+   
+#Putting my results together
+  Res_1 <- data.frame(Protein_Name, Pval_1, R2_1)
+  Res_2 <- data.frame(Protein_Name, Pval_2, R2_2)
+  Res_3 <- data.frame(Protein_Name, Pval_3, R2_3)
+  Res_4 <- data.frame(Protein_Name, Pval_4, R2_4)
+  
+  
+#combining my results to my empty data frames I made before the loop
+  Baseline <- rbind(Res_1, Baseline)
+  Base_Int_R.NR <- rbind(Res_2, Base_Int_R.NR)
+  Base_Int_Sex <- rbind(Res_3, Base_Int_Sex)
+  Base_Int_GSTM1 <- rbind(Res_4, Base_Int_GSTM1)
+  
+}
+
+```
+
+I have my results from the regressions now, but the data frames are messy. When I isolated the p values from the regression summaries, there were pvalues of several
+comparisons. I am only interested in the interaction comparison, for example "Pre:Responder_Status".
+Here, I will isolate the rows o p values I need and I will use these data frames later on for sorting by p values and/or R2.
+
+QUESTION: I want to use Benchamini-Hochberg (or a similar method) to adjust my p-values. Is the placement of the BH test code logical?
+
+```{r}
+#First, I move the row names into their own column to make the df easier to work with
+Baseline_x <- tibble::rownames_to_column(Baseline, "x")
+
+#Now I will select only rows with Pre values
+Baseline_Subset <- Baseline_x[grep("Pre", Baseline_x$x), ]
+
+#Removing the first column of "Pre" names now that the Pre values are isolated
+Baseline_clean <- select(Baseline_Subset, -1) 
+
+#Here is the BH test to adjust my p values
+Baseline_clean$Pval.adj_1 <- p.adjust(Baseline_clean$Pval_1, method = "BH")
+
+
+#Repeat steps above for remaining dfs
+
+
+#R.NR
+Base_Int_R.NR_x <- tibble::rownames_to_column(Base_Int_R.NR, "x")
+
+Base_Int_R.NR_Subset <- Base_Int_R.NR_x[grep("Pre:Responder", Base_Int_R.NR_x$x), ]
+
+Base_Int_R.NR_clean <- select(Base_Int_R.NR_Subset, -1) 
+
+Base_Int_R.NR_clean$Pval.adj_2 <- p.adjust(Base_Int_R.NR_clean$Pval_2, method = "BH")
+
+
+#Sex
+Base_Int_Sex_x <- tibble::rownames_to_column(Base_Int_Sex, "x")
+
+Base_Int_Sex_Subset <- Base_Int_Sex_x[grep("Pre:Sex", Base_Int_Sex_x$x), ]
+
+Base_Int_Sex_clean <- select(Base_Int_Sex_Subset, -1) 
+
+#I don't know why BH test is not working for the Pval_3 column of this df
+Base_Int_Sex_clean$Pval.adj_3 <- p.adjust(Base_Int_Sex_clean$Pval_3, method = "BH")
+
+
+#GSTM1
+Base_Int_GSTM1_x <- tibble::rownames_to_column(Base_Int_GSTM1, "x")
+
+Base_Int_GSTM1_Subset <- Base_Int_GSTM1_x[grep("Pre:GSTM1", Base_Int_GSTM1_x$x), ]
+
+Base_Int_GSTM1_clean <- select(Base_Int_GSTM1_Subset, -1)
+
+Base_Int_GSTM1_clean$Pval.adj_4 <- p.adjust(Base_Int_GSTM1_clean$Pval_4, method = "BH")
+
+
+write.csv(Baseline_clean,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Baseline_Reg_4.21.2023.csv")
+
+write.csv(Base_Int_R.NR_clean,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Baseline_Int_R.NR_Reg_4.21.2023.csv")
+
+write.csv(Base_Int_Sex_clean,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Baseline_Int_Sex_Reg_4.21.2023.csv")
+
+write.csv(Base_Int_GSTM1_clean,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Baseline_Int_GSTM1_Reg_4.21.2023.csv")
+```
+
+
