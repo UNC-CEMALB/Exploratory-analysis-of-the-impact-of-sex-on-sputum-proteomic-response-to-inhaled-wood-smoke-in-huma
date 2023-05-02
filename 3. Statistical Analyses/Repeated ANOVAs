@@ -1,0 +1,352 @@
+Repeated ANOVAs
+
+```{r}
+setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
+Output = ("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output")
+
+library(readxl)
+library(tidyverse)
+library(reshape2)
+library(rstatix)
+
+
+#reading in file
+proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
+
+Demo <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/Subject_Info_113022_Copy.xlsx")
+
+GSTM1 <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/GSTM1_status.xlsx", sheet = "R_data")
+```
+
+
+Let's add some demographics data to use later in our analysis
+```{r}
+#First, let's remove the unneeded cols from the Demo df and rename the Subject_Number to ID in order to more easily merge this df to the other dfs
+
+Demo <- Demo %>% 
+  rename("ID" = "Subject_Number")
+
+#Let's just get sex and ID variables from the Demo df to add to our proteomics_df
+Sex <- Demo %>% 
+  select(c(ID, Sex))
+
+proteomics_df = proteomics_df %>%
+    # I want to separate columns into ID#, Responder status, and Pre_Post (without ID#)
+  separate(Subject_ID, c("Responder_Status", "ID"), sep = "_") %>%   
+  separate(Sample_ID, c("Pre_Post", NA), sep = "_") %>% 
+  separate(Protein_Name, c("Protein_Name", NA), sep = "_")  
+
+data <- merge(proteomics_df, Sex, by = "ID")
+data <- merge(data, GSTM1, by = "ID")
+
+#let's log2 transform our data before our analysis
+data$Log2_Intensity <- log2(data$Intensity)
+
+```
+
+
+Now I will reorganize the data df into more usable formats and change the R/NR and M/F IDs into numbers - this allows the ANOVA function to work properly
+```{r}
+
+#I will isolate only the variables I want
+data_long <- data %>% 
+   select(c(ID, Responder_Status, Sex, GSTM1_Status, Pre_Post, Log2_Intensity, Protein_Name))
+
+data_wide <- data_long %>% 
+  pivot_wider(
+    names_from = Pre_Post,
+    values_from = Log2_Intensity)
+
+#Now I will make new columns for the binomials
+data_wide$Responder_Status_num <- 
+  case_when(
+    data_wide$Responder_Status == "NR"  ~ 0,
+    data_wide$Responder_Status == "R"  ~ 1)
+
+data_wide$Sex_num <- 
+  case_when(
+    data_wide$Sex == "F"  ~ 0,
+    data_wide$Sex == "M"  ~ 1)
+
+data_wide <- data_wide %>% 
+  rename("GSTM1" = "GSTM1_Status")
+
+#Note: GSTM1_Status is already in numeric where: 
+#GSTM1 sufficient = 1, GSTM1 null = 2
+
+```
+
+My goals for the Repeated Measure ANOVAs is to determine in each  protein:
+
+Whether there is any difference in protein expression across both time points. In this case, time is a within-subject factor.
+
+Whether there is any difference between male and female participants, Responders and Non-Responders, or GSTM1 wt or null. 
+Where sex, R/NR status, and GSTM1 genotype are between-subject factors. 
+
+Whether there is an interaction effect between time and sex/R.NR status/GSTM1.
+
+I am using this website to help me: https://advstats.psychstat.org/book/anova/rmanova.php
+
+```{r}
+data_less_wide <- data_wide %>% 
+  select(c("ID", "Protein_Name", "Pre", "Post", "Sex_num", "Responder_Status_num", "GSTM1"))
+
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+proteins <- unique(data_less_wide$Protein_Name)
+
+#create an empty dataframe for the loop function to place p values into
+aov_TP_res <- data.frame()
+aov_TP_Sex_res <- data.frame()
+aov_TP_R.NR_res <- data.frame()
+aov_TP_GSTM1_res <- data.frame()
+
+for (i in 1:length(proteins)) {
+  #head of for loop  defines a collection of objects such as the elements of a vector or a list
+    
+  data_filtered <- data_less_wide %>%
+  filter(Protein_Name == proteins[i])
+  
+  #We need to reshape this new df to make it easier to work with for the anova
+  data <- data_filtered %>% 
+    melt( 
+      id.vars = c("ID", "Sex_num", "Responder_Status_num", "GSTM1"),
+      measure.vars = c("Pre", "Post"),
+      variable.name = "Time_Point",
+      value.name = "Expression")
+
+  
+  
+  #We first consider just one within-subject factor, Time_Point, to evaluate whether there is any difference in protein expression across Pre and Post.
+  
+  aov_TP <- aov(Expression ~ Time_Point + Error(ID / Time_Point), data = data)
+  
+  #Now we consider an additional between-subject factor, in this case sex, as an interaction. 
+
+  
+  #for classifications like sex, I need to aggregate the data and then run the anova. I found that this aggregation step is required, otherwise
+  #I get a warning the the data was singular and the loop does not run. 
+  
+  #I have to acknowledge that because I aggregate the data, I am not controlling that between-participant variation over all of our within-subjects variables.
+
+  
+  #sex is equivalent to just average for each person across all the conditions created by the combinations of Timepoint and Sex_num
+  df_1 <- aggregate(Expression ~ Time_Point + Sex_num, data = data, FUN = mean)
+  aov_TP_Sex <- aov(Expression ~ Sex_num, data = df_1) # ANOVA with just the between-effect
+  
+  #Repeat steps for Responder_Status
+  df_2 <- aggregate(Expression ~ Time_Point + Responder_Status_num, data = data, FUN = mean)
+  aov_TP_R.NR <- aov(Expression ~ Responder_Status_num, data = df_2)
+  
+  #Repeat steps for GSTM1
+  df_3 <- aggregate(Expression ~ Time_Point + GSTM1, data = data, FUN = mean)
+  aov_TP_GSTM1 <- aov(Expression ~ GSTM1, data = df_3)
+  
+  
+  #To extract the p-value from the aov summary, I must unlist the summary and call for the specific identifier that has the p-value i need
+  TP_pval_1 <-  unlist(summary(aov_TP))
+  TP_pval <- TP_pval_1["Error: ID:Time_Point.Pr(>F)1"]
+  
+  TP_Sex_pval_1 <-  unlist(summary(aov_TP_Sex))
+  TP_Sex_pval <- TP_Sex_pval_1["Pr(>F)1"]
+  
+  TP_R.NR_pval_1 <-  unlist(summary(aov_TP_R.NR))
+  TP_R.NR_pval <- TP_R.NR_pval_1["Pr(>F)1"]
+  
+  TP_GSTM1_pval_1 <-  unlist(summary(aov_TP_GSTM1))
+  TP_GSTM1_pval <- TP_GSTM1_pval_1["Pr(>F)1"]
+
+  #Making a list of the protein names to add to the final df 
+  Protein_Name <- proteins[i] 
+   
+  Res_1 <- data.frame(Protein_Name, TP_pval)
+  Res_2 <- data.frame(Protein_Name, TP_Sex_pval)
+  Res_3 <- data.frame(Protein_Name, TP_R.NR_pval)
+  Res_4 <- data.frame(Protein_Name, TP_GSTM1_pval)
+  
+  aov_TP_res <- rbind(Res_1, aov_TP_res)
+  aov_TP_Sex_res <- rbind(Res_2, aov_TP_Sex_res)
+  aov_TP_R.NR_res <- rbind(Res_3, aov_TP_R.NR_res)
+  aov_TP_GSTM1_res <- rbind(Res_4, aov_TP_GSTM1_res)
+  
+}
+
+```
+
+
+
+Now I will clean up the dfs as well as make a combined df
+
+```{r}
+#First, I move the row names into their own column to make the df easier to work with
+aov_TP_res_x <- tibble::rownames_to_column(aov_TP_res, "x")
+
+#Now I will delete the x column and arrange the data by pvalue. I will make dfs that filter by p<0.05 and dfs that do not.
+aov_TP_res_clean <- select(aov_TP_res_x, -1)
+aov_TP_res_sig <- aov_TP_res_clean %>% 
+  filter(TP_pval < 0.05) %>% 
+  arrange(TP_pval)
+
+#Repeat steps above for other 3 dfs
+aov_TP_Sex_res_x <- tibble::rownames_to_column(aov_TP_Sex_res, "x")
+aov_TP_Sex_res_clean <- select(aov_TP_Sex_res_x, -1) 
+aov_TP_Sex_res_sig <- aov_TP_Sex_res_clean %>% 
+  filter(TP_Sex_pval < 0.05) %>% 
+  arrange(TP_Sex_pval)
+
+aov_TP_R.NR_res_x <- tibble::rownames_to_column(aov_TP_R.NR_res, "x")
+aov_TP_R.NR_res_clean <- select(aov_TP_R.NR_res_x, -1) 
+aov_TP_R.NR_res_sig <- aov_TP_R.NR_res_clean %>% 
+  filter(TP_R.NR_pval < 0.05) %>% 
+  arrange(TP_R.NR_pval)
+
+aov_TP_GSTM1_res_x <- tibble::rownames_to_column(aov_TP_GSTM1_res, "x")
+aov_TP_GSTM1_res_clean <- select(aov_TP_GSTM1_res_x, -1) 
+aov_TP_GSTM1_res_sig <- aov_TP_GSTM1_res_clean %>% 
+  filter(TP_GSTM1_pval < 0.05) %>% 
+  arrange(TP_GSTM1_pval)
+
+#Here I will make a combined df will all of the results
+Repeated_msr_aov_Res <- merge(aov_TP_res_clean, aov_TP_Sex_res_clean, by = "Protein_Name")
+Repeated_msr_aov_Res <- merge(Repeated_msr_aov_Res, aov_TP_R.NR_res_clean, by = "Protein_Name")
+Repeated_msr_aov_Res <- merge(Repeated_msr_aov_Res, aov_TP_GSTM1_res_clean, by = "Protein_Name")
+
+#Now I am interested if there is an overlap in significant proteins across each results df
+R.NR_Sex_overlap <- merge(aov_TP_R.NR_res_sig, aov_TP_Sex_res_sig, by = "Protein_Name")
+Sex_GSTM1_overlap <- merge(aov_TP_Sex_res_sig, aov_TP_GSTM1_res_sig, by = "Protein_Name")
+GSTM1_R.NR_overlap <- merge(aov_TP_GSTM1_res_sig, aov_TP_R.NR_res_sig, by = "Protein_Name")
+
+R.NR_sex_GSTM1_overlap <- merge(aov_TP_R.NR_res_sig, aov_TP_Sex_res_sig, by = "Protein_Name")
+R.NR_sex_GSTM1_overlap <- merge(R.NR_sex_GSTM1_overlap, aov_TP_GSTM1_res_sig, by = "Protein_Name")
+
+write.csv(Repeated_msr_aov_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Repeated_msr_aov_Res_4.18.2023.csv")
+
+write.csv(R.NR_Sex_overlap,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/R.NR_Sex_overlap_05.01.2023.csv")
+
+write.csv(Sex_GSTM1_overlap,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Sex_GSTM1_overlap_05.01.2023.csv")
+
+write.csv(GSTM1_R.NR_overlap,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/GSTM1_R.NR_overlap_05.01.2023.csv")
+
+write.csv(Repeated_msr_aov_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Repeated_msr_aov_Res_05.01.2023.csv")
+
+write.csv(R.NR_sex_GSTM1_overlap,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/R.NR_sex_GSTM1_overlap_05.01.2023.csv")
+```
+
+
+Analysis for repeated ANOVAs for multiple interactions
+
+```{r}
+data_less_wide <- data_wide %>% 
+  select(c("ID", "Protein_Name", "Pre", "Post", "Sex_num", "Responder_Status_num", "GSTM1"))
+
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+proteins <- unique(data_less_wide$Protein_Name)
+
+#create an empty dataframe for the loop function to place p values into
+aov_R.NR_Sex_res <- data.frame()
+aov_Sex_GSTM1_res <- data.frame()
+aov_R.NR_GSTM1_res <- data.frame()
+
+for (i in 1:length(proteins)) {
+  #head of for loop  defines a collection of objects such as the elements of a vector or a list
+    
+  data_filtered <- data_less_wide %>%
+  filter(Protein_Name == proteins[i])
+  
+  #We need to reshape this new df to make it easier to work with for the anova
+  data <- data_filtered %>% 
+    melt( 
+      id.vars = c("ID", "Sex_num", "Responder_Status_num", "GSTM1"),
+      measure.vars = c("Pre", "Post"),
+      variable.name = "Time_Point",
+      value.name = "Expression")
+
+  
+#because I aggregate the data, I am not controlling that between-participant variation over all of our within-subjects variables.
+  df_1 <- aggregate(Expression ~ Time_Point + Responder_Status_num * Sex_num, data = data, FUN = mean)
+  aov_R.NR_Sex <- aov(Expression ~ Responder_Status_num * Sex_num, data = df_1) # ANOVA with just the between-effect
+  
+  #Repeat steps for Responder_Status
+  df_2 <- aggregate(Expression ~ Time_Point + Sex_num * GSTM1, data = data, FUN = mean)
+  aov_Sex_GSTM1 <- aov(Expression ~ Sex_num * GSTM1, data = df_2)
+  
+  #Repeat steps for GSTM1
+  df_3 <- aggregate(Expression ~ Time_Point + Responder_Status_num * GSTM1, data = data, FUN = mean)
+  aov_R.NR_GSTM1 <- aov(Expression ~ Responder_Status_num * GSTM1, data = df_3)
+  
+  
+
+  #To extract the p-value from the aov summary, I must unlist the summary and call for the specific identifier that has the p-value i need
+
+  R.NR_Sex_res_pval_1 <-  unlist(summary(aov_R.NR_Sex))
+  R.NR_Sex_res_pval <- R.NR_Sex_res_pval_1["Pr(>F)1"]
+  
+  Sex_GSTM1_res_pval_1 <-  unlist(summary(aov_Sex_GSTM1))
+  Sex_GSTM1_res_pval <- Sex_GSTM1_res_pval_1["Pr(>F)1"]
+  
+  R.NR_GSTM1_pval_1 <-  unlist(summary(aov_R.NR_GSTM1))
+  R.NR_GSTM1_pval <- R.NR_GSTM1_pval_1["Pr(>F)1"]
+
+  #Making a list of the protein names to add to the final df 
+  Protein_Name <- proteins[i] 
+   
+  Res_1 <- data.frame(Protein_Name, R.NR_Sex_res_pval)
+  Res_2 <- data.frame(Protein_Name, Sex_GSTM1_res_pval)
+  Res_3 <- data.frame(Protein_Name, R.NR_GSTM1_pval)
+  
+
+  aov_R.NR_Sex_res <- rbind(Res_1, aov_R.NR_Sex_res)
+  aov_Sex_GSTM1_res <- rbind(Res_2, aov_Sex_GSTM1_res)
+  aov_R.NR_GSTM1_res <- rbind(Res_3, aov_R.NR_GSTM1_res)
+  
+  
+}
+
+```
+
+
+
+Now I will clean up the dfs and combine them
+```{r}
+
+aov_R.NR_Sex_res_x <- tibble::rownames_to_column(aov_R.NR_Sex_res, "x")
+aov_R.NR_Sex_res_clean <- select(aov_R.NR_Sex_res_x, -1) 
+aov_R.NR_Sex_res_sig <- aov_R.NR_Sex_res_clean %>% 
+  filter(R.NR_Sex_res_pval < 0.05) %>% 
+  arrange(R.NR_Sex_res_pval)
+#177 sig proteins
+
+
+aov_Sex_GSTM1_res_x <- tibble::rownames_to_column(aov_Sex_GSTM1_res, "x")
+aov_Sex_GSTM1_res_clean <- select(aov_Sex_GSTM1_res_x, -1) 
+aov_Sex_GSTM1_res_sig <- aov_Sex_GSTM1_res_clean %>% 
+  filter(Sex_GSTM1_res_pval < 0.05) %>% 
+  arrange(Sex_GSTM1_res_pval)
+#138 sig proteins
+
+aov_R.NR_GSTM1_res_x <- tibble::rownames_to_column(aov_R.NR_GSTM1_res, "x")
+aov_R.NR_GSTM1_res_clean <- select(aov_R.NR_GSTM1_res_x, -1) 
+aov_R.NR_GSTM1_res_sig <- aov_R.NR_GSTM1_res_clean %>% 
+  filter(R.NR_GSTM1_pval < 0.05) %>% 
+  arrange(R.NR_GSTM1_pval)
+#76 sig proteins
+
+
+#Merge all dfs
+Repeated_msr_aov_int_Res <- merge(aov_R.NR_Sex_res_sig, aov_Sex_GSTM1_res_sig, by = "Protein_Name")
+Repeated_msr_aov_int_Res <- merge(Repeated_msr_aov_int_Res, aov_R.NR_GSTM1_res_sig, by = "Protein_Name")
+
+
+write.csv(aov_R.NR_Sex_res_sig,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/aov_R.NR_Sex_res_sig_05.01.2023.csv")
+
+write.csv(aov_Sex_GSTM1_res_sig,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/aov_Sex_GSTM1_res_sig_05.01.2023.csv")
+
+write.csv(aov_R.NR_GSTM1_res_sig,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/aov_R.NR_GSTM1_res_sig_05.01.2023.csv")
+
+write.csv(Repeated_msr_aov_int_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Repeated_msr_aov_int_Res_05.01.2023.csv")
+```
+
+
+
+
+
+
