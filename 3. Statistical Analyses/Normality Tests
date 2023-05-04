@@ -1,3 +1,4 @@
+Testing the Normality of protein expression across all subjects using the Shapiro-Wilk Test
 
 ```{r}
 setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
