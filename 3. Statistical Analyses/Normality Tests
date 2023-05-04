@@ -1,0 +1,90 @@
+
+```{r}
+setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
+Output = ("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output")
+
+library(readxl)
+library(tidyverse)
+library(reshape2)
+
+
+#reading in file
+proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
+```
+
+
+Protein expression from Post and Pre data were log2 transformed and the Shapiro-Wilk test was performed on the difference between Post - Pre.
+
+Let's edit the first df to make it easier to work with
+```{r}
+proteomics_df <- proteomics_df %>%
+  separate(Subject_ID, c("Responder_Status", "ID"), sep = "_") %>%   
+  separate(Sample_ID, c("Pre_Post", NA), sep = "_") %>% 
+  separate(Protein_Name, c("Protein_Name", NA), sep = "_")  
+
+proteomics_df$Log2_Intensity <- log2(proteomics_df$Intensity)
+
+data <-  proteomics_df %>% 
+  select(c("ID", "Protein_Name", "Pre_Post", "Log2_Intensity"))
+
+data_wide <- data %>% 
+  pivot_wider(
+    names_from = Pre_Post,
+    values_from = Log2_Intensity)
+
+data_wide$Delta <- (data_wide$Post - data_wide$Pre)
+
+```
+
+
+This is the loop for the actual shapiro-wilk test.
+```{r post}
+proteins <- unique(data_wide$Protein_Name)
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+
+SW_Res <- data.frame()
+#create an empty dataframe for the loop function to place Post SW values into
+
+for (i in 1:length(proteins)) {
+  #head of for loop  defines a collection of objects such as the elements of a vector or a list
+    
+  data_wide_filtered <- data_wide %>%
+  filter(Protein_Name == proteins[i])
+#make a new data frame that looks within the Post_Prot and the filter function will retain all rows that satisfy the conditions when the 
+Protein_Name variable is the same as the variable from the proteins list.
+  
+  SW <- shapiro.test(data_wide_filtered$Delta)
+
+  pval <- SW$p.value
+  #pval object is a list that selects for the p.values generated from the SW_res object
+  
+  Protein_Name <- proteins[i] 
+   
+  res <- data.frame(Protein_Name, pval)
+  
+  #This new object 'res' will be a data frame that contains the list object 'pval' where the Protein_Name for this data frame will be from the 
+  entire characterized vector 'proteins'
+  
+  SW_Res <- rbind(res, SW_Res)
+  
+}
+
+#Let's make a column that indicates whether each protein is normal or not
+
+SW_Res$Normal_Dist <- 
+  case_when(
+  SW_Res$pval < 0.05 ~ "No",
+  SW_Res$pval > 0.05 ~ "Yes")
+
+#I'm curious how many proteins are normally distributed
+SW_Res_Norm <- SW_Res %>% 
+  filter(Normal_Dist == "Yes")
+#1535 proteins are normally distributed
+
+SW_Res_Not_Norm <- SW_Res %>% 
+  filter(Normal_Dist == "No")
+#319 proteins are not normally distributed
+
+write.csv(SW_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/SW_Res_4.19.2023.csv")
+
+```
