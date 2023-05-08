@@ -1,0 +1,143 @@
+
+```{r}
+setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
+Output = ("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output")
+
+library(readxl)
+library(tidyverse)
+library(reshape2)
+library(rstatix)
+
+
+#reading in files
+proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
+
+Demo <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/Subject_Info_113022_Copy.xlsx")
+
+GSTM1 <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/GSTM1_status.xlsx", sheet = "R_data")
+```
+
+
+Let's add some demographics data to use later in our analyses
+```{r}
+#First, let's remove the unneeded cols from the Demo df and rename the Subject_Number to ID in order to more easily merge this df to the other dfs
+Demo <- Demo %>% 
+  rename("ID" = "Subject_Number")
+
+#Let's just get sex and ID variables from the Demo df to add to our proteomics_df
+Sex <- Demo %>% 
+  select(c(ID, Sex))
+
+proteomics_df = proteomics_df %>%
+  separate(Subject_ID, c("Responder_Status", "ID"), sep = "_") %>%   
+  separate(Sample_ID, c("Pre_Post", NA), sep = "_") %>% 
+  separate(Protein_Name, c("Protein_Name", NA), sep = "_")  
+
+#Let's log2 transform the raw data and just use that for our analyses
+proteomics_df$Log2_Intensity <- log2(proteomics_df$Intensity)
+
+data <- merge(proteomics_df, Sex, by = "ID")
+data <- merge(data, GSTM1, by = "ID")
+#Note: GSTM1_Status is already in numeric where: 
+#GSTM1 sufficient = 1, GSTM1 null = 2
+
+#I have to change character classifications to numeric before I can do analyses
+data$Responder_Status_num <- 
+  case_when(
+    data$Responder_Status == "NR"  ~ 0,
+    data$Responder_Status == "R"  ~ 1)
+
+data$Sex_num <- 
+  case_when(
+    data$Sex == "F"  ~ 0,
+    data$Sex == "M"  ~ 1)
+
+data <-  data %>% 
+  select(c("ID", "Protein_Name", "Pre_Post", "Log2_Intensity",
+           "Responder_Status_num", "GSTM1_Status", "Sex_num")) %>% 
+  rename("GSTM1" = "GSTM1_Status")
+
+data_wide <- data %>% 
+  pivot_wider(
+    names_from = Pre_Post,
+    values_from = Log2_Intensity)
+
+
+data_wide$Delta <- (data_wide$Post - data_wide$Pre)
+
+```
+
+
+First, we will run One-way ANOVAs to determine if sex, R/NR status, or GSTM1 genotype are able to significantly explain variation of response 
+to wood smoke (i.e.Post - Pre)
+
+```{r}
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+proteins <- unique(data_wide$Protein_Name)
+
+#create an empty dataframe for the loop function to place p values into
+aov_Sex_res <- data.frame()
+aov_R.NR_res <- data.frame()
+aov_GSTM1_res <- data.frame()
+
+for (i in 1:length(proteins)) {
+  #head of for loop  defines a collection of objects such as the elements of a vector or a list
+    
+  data_filtered <- data_wide %>%
+  filter(Protein_Name == proteins[i])
+
+  aov_Sex <- aov(Delta ~ Sex_num, data = data_filtered)
+  aov_R.NR <- aov(Delta ~ Responder_Status_num, data = data_filtered)
+  aov_GSTM1 <- aov(Delta ~ GSTM1, data = data_filtered)
+
+  
+  #To extract the p-value from the aov summary, I must unlist the summary and call for the specific identifier that has the p-value i need
+  
+  Sex_pval_1 <-  unlist(summary(aov_Sex))
+  Sex_pval <- Sex_pval_1["Pr(>F)1"]
+  
+  R.NR_pval_1 <-  unlist(summary(aov_R.NR))
+  R.NR_pval <- R.NR_pval_1["Pr(>F)1"]
+  
+  GSTM1_pval_1 <-  unlist(summary(aov_GSTM1))
+  GSTM1_pval <- GSTM1_pval_1["Pr(>F)1"]
+
+  #Making a list of the protein names to add to the final df 
+  Protein_Name <- proteins[i] 
+   
+  Res_1 <- data.frame(Protein_Name, Sex_pval)
+  Res_2 <- data.frame(Protein_Name, R.NR_pval)
+  Res_3 <- data.frame(Protein_Name, GSTM1_pval)
+  
+  aov_Sex_res <- rbind(Res_1, aov_Sex_res)
+  aov_R.NR_res <- rbind(Res_2, aov_R.NR_res)
+  aov_GSTM1_res <- rbind(Res_3, aov_GSTM1_res)
+  
+}
+
+```
+
+
+Now I will clean up the aov results dfs and combine them
+```{r}
+#First, I move the row names into their own column to make the df easier to work with
+aov_Sex_res_x <- tibble::rownames_to_column(aov_Sex_res, "x")
+
+#Now I will delete the x column
+aov_Sex_res_clean <- select(aov_Sex_res_x, -1) 
+
+#Repeat steps above for other 2 dfs
+aov_R.NR_res_x <- tibble::rownames_to_column(aov_R.NR_res, "x")
+aov_R.NR_res_clean <- select(aov_R.NR_res_x, -1) 
+
+aov_GSTM1_res_x <- tibble::rownames_to_column(aov_GSTM1_res, "x")
+aov_GSTM1_res_clean <- select(aov_GSTM1_res_x, -1) 
+
+#Merge all dfs
+One_Way_aov_Res <- merge(aov_Sex_res_clean, aov_R.NR_res_clean, by = "Protein_Name")
+One_Way_aov_Res <- merge(One_Way_aov_Res, aov_GSTM1_res_clean, by = "Protein_Name")
+
+
+write.csv(One_Way_aov_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/One_Way_aov_Res_4.19.2023.csv")
+```
+
