@@ -1,0 +1,180 @@
+
+```{r}
+setwd("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/scripts")
+Output = ("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output")
+
+library(tidyverse)
+library(reshape2)
+library(rstatix)
+
+#reading in file
+data_long <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/data_long_05.05.2023.csv")
+
+data_wide <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/data_wide_05.05.2023.csv")
+
+#Note: GSTM1_Status is already in numeric where: 
+#GSTM1 sufficient = 1, GSTM1 null = 0
+#M = 1 and F = 0
+#R = 1 and NR = 0
+
+```
+
+
+Even though the linear regression is the best model according to the partial F-tests, I will analyze the quadratic and cubic regressions just to show that we considered them as models too.
+
+Interactions for quadratic formula for each category: R/NR, GSTM1 genotype, and sex.
+
+For information on how the polym function works, go to:
+https://www.tutorialspoint.com/how-to-create-polynomial-regression-model-in-r
+```{r}
+proteins <- unique(data_wide$Protein_Name)
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+
+Squ_Res <- data.frame()
+Squ_R.NR_Res <- data.frame()
+Squ_Sex_Res <- data.frame()
+Squ_GSTM1_Res <- data.frame()
+
+for (i in 1:length(proteins)) {
+
+  data_wide_filtered <- data_wide %>%
+  filter(Protein_Name == proteins[i])
+
+  #make a new data frame that looks within the data_wide and the filter function will retain all rows that satisfy the conditions when the Protein_Name variable is the same as the variable from the proteins list.
+  
+#we use the poly() function where in lm(y1~polym(x1,x2,degree = 2,raw = TRUE)) y1 = Post, X1 = Pre and X2 is the variable that may be causing an interaction i.e. Responder_Status/Sex/GSTM1. raw must be = TRUE or the function will not run. Usualy orthogonal regressions with raw = FALSE are preferred but this function will still give us an identical answer.
+  
+  Squ_Reg <- lm(Post ~ Pre + I(Pre^2), data = data_wide_filtered)
+  
+  Squ_Reg_R.NR <- lm(Post ~ polym(Pre, Responder_Status_num, degree = 2, raw = TRUE), 
+                     data = data_wide_filtered)
+  
+  Squ_Reg_Sex <- lm(Post ~ polym(Pre, Sex_num, degree = 2, raw = TRUE), 
+                     data = data_wide_filtered)
+
+  Squ_Reg_GSTM1 <- lm(Post ~ polym(Pre, GSTM1_Status, degree = 2, raw = TRUE), 
+                     data = data_wide_filtered)
+  
+
+  #When selecting pvalues, for the polym() you want the summary() that ends in 1.1 for example,
+  #polym(Pre, Responder_Status_num, degree = 2, raw = TRUE)1.1 as that is the comparison as Pre:Responder_Status_num
+  
+  Pval <- summary(Squ_Reg)$coefficients["Pre", "Pr(>|t|)"] 
+  
+  Pval_R.NR <- summary(Squ_Reg_R.NR)$coefficients[
+    "polym(Pre, Responder_Status_num, degree = 2, raw = TRUE)1.1", "Pr(>|t|)"] 
+  
+  Pval_Sex <- summary(Squ_Reg_Sex)$coefficients[
+    "polym(Pre, Sex_num, degree = 2, raw = TRUE)1.1", "Pr(>|t|)"] 
+  
+  Pval_GSTM1 <- summary(Squ_Reg_GSTM1)$coefficients[
+    "polym(Pre, GSTM1_Status, degree = 2, raw = TRUE)1.1", "Pr(>|t|)"] 
+  
+  R2 <- summary(Squ_Reg)$adj.r.squared
+  R2_R.NR <- summary(Squ_Reg_R.NR)$adj.r.squared
+  R2_Sex <- summary(Squ_Reg_Sex)$adj.r.squared
+  R2_GSTM1 <- summary(Squ_Reg_GSTM1)$adj.r.squared
+  
+  #Use this to add the protein names back into the final dfs
+  Protein_Name <- proteins[i] 
+  
+  #sum up our data in separate dfs
+  Squ <- data.frame(Protein_Name, Pval, R2)
+  Squ_R.NR <- data.frame(Protein_Name, Pval_R.NR, R2_R.NR)
+  Squ_Sex <- data.frame(Protein_Name, Pval_Sex, R2_Sex)
+  Squ_GSTM1 <- data.frame(Protein_Name, Pval_GSTM1, R2_GSTM1)
+  
+  #bind the previous dfs with the final dfs we made before the loop
+  Squ_Res <- rbind(Squ_Res, Squ)
+  Squ_R.NR_Res <- rbind(Squ_R.NR_Res, Squ_R.NR)
+  Squ_Sex_Res <- rbind(Squ_Sex_Res, Squ_Sex)
+  Squ_GSTM1_Res <- rbind(Squ_GSTM1_Res, Squ_GSTM1)
+  
+}
+
+write.csv(Squ_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Squ_Res_05.12.2023.csv")
+
+write.csv(Squ_R.NR_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Squ_R.NR_Res_05.12.2023.csv")
+
+write.csv(Squ_Sex_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Squ_Sex_Res_05.12.2023.csv")
+
+write.csv(Squ_GSTM1_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Squ_GSTM1_Res_05.12.2023.csv")
+
+
+```
+
+
+interactions for cubic formula for each category: R/NR, GSTM1 genotype, and sex
+```{r}
+proteins <- unique(data_wide$Protein_Name)
+#proteins list will hold unique protein accession names from Protein_Accession column of the proteomics_df
+
+Cube_Res <- data.frame()
+Cube_R.NR_Res <- data.frame()
+Cube_Sex_Res <- data.frame()
+Cube_GSTM1_Res <- data.frame()
+
+for (i in 1:length(proteins)) {
+
+  data_wide_filtered <- data_wide %>%
+  filter(Protein_Name == proteins[i])
+#make a new data frame that looks within the data_wide and the filter function will retain all rows that satisfy the conditions when the Protein_Name variable is the same as the variable from the proteins list.
+  
+  #we use the poly() function where in lm(y1~polym(x1,x2,degree=3,raw=TRUE)) y1 = Post, X1 = Pre and X2 is the variable that may be causing an interaction i.e. Responder_Status/Sex/GSTM1
+  
+  Cube_Reg <- lm(Post ~ Pre + I(Pre^2) + I(Pre^3), data = data_wide_filtered)
+  
+  Cube_Reg_R.NR <- lm(Post ~ polym(Pre, Responder_Status_num, degree = 3, raw = TRUE), 
+                     data = data_wide_filtered)
+  
+  Cube_Reg_Sex <- lm(Post ~ polym(Pre, Sex_num, degree = 3, raw = TRUE), 
+                     data = data_wide_filtered)
+
+  Cube_Reg_GSTM1 <- lm(Post ~ polym(Pre, GSTM1_Status, degree = 3, raw = TRUE), 
+                     data = data_wide_filtered)
+  
+
+  #When selecting pvalues, for the polym() you want the summary() that ends in 1.1 for example,
+  #polym(Pre, Responder_Status_num, degree = 2, raw = FALSE)1.1 as that is the comparison as Pre:Responder_Status_num
+  Pval <- summary(Cube_Reg)$coefficients["Pre", "Pr(>|t|)"] 
+ 
+  Pval_R.NR <- summary(Cube_Reg_R.NR)$coefficients[
+    "polym(Pre, Responder_Status_num, degree = 3, raw = TRUE)1.1", "Pr(>|t|)"] 
+  
+  Pval_Sex <- summary(Cube_Reg_Sex)$coefficients[
+    "polym(Pre, Sex_num, degree = 3, raw = TRUE)1.1", "Pr(>|t|)"] 
+  
+  Pval_GSTM1 <- summary(Cube_Reg_GSTM1)$coefficients[
+    "polym(Pre, GSTM1_Status, degree = 3, raw = TRUE)1.1", "Pr(>|t|)"] 
+  
+  R2 <- summary(Cube_Reg)$adj.r.squared
+  R2_R.NR <- summary(Cube_Reg_R.NR)$adj.r.squared
+  R2_Sex <- summary(Cube_Reg_Sex)$adj.r.squared
+  R2_GSTM1 <- summary(Cube_Reg_GSTM1)$adj.r.squared
+  
+  #Use this to add the protein names back into the final dfs
+  Protein_Name <- proteins[i] 
+  
+  #sum up our data in separate dfs
+  Cube <- data.frame(Protein_Name, Pval, R2)
+  Cube_R.NR <- data.frame(Protein_Name, Pval_R.NR, R2_R.NR)
+  Cube_Sex <- data.frame(Protein_Name, Pval_Sex, R2_Sex)
+  Cube_GSTM1 <- data.frame(Protein_Name, Pval_GSTM1, R2_GSTM1)
+  
+  #bind the previous dfs with the final dfs we made before the loop
+  Cube_Res <- rbind(Cube_Res, Cube)
+  Cube_R.NR_Res <- rbind(Cube_R.NR_Res, Cube_R.NR)
+  Cube_Sex_Res <- rbind(Cube_Sex_Res, Cube_Sex)
+  Cube_GSTM1_Res <- rbind(Cube_GSTM1_Res, Cube_GSTM1)
+  
+}
+
+write.csv(Cube_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Cube_Res_05.12.2023.csv")
+
+write.csv(Cube_R.NR_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Cube_R.NR_Res_05.12.2023.csv")
+
+write.csv(Cube_Sex_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Cube_Sex_Res_05.12.2023.csv")
+
+write.csv(Cube_GSTM1_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output/Cube_GSTM1_Res_05.12.2023.csv")
+
+```
