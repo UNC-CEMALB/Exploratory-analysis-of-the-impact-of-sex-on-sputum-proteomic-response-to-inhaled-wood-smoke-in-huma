@@ -1,0 +1,1378 @@
+---
+title: "WSP MvF Analyses"
+output: html_document
+date: "2024-02-14"
+---
+
+# Set up workspace
+
+```{r message = FALSE, warning = FALSE}
+# Set directory for knitr to save the html
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+
+```
+
+# Load packages and datasets.
+```{r message = FALSE, warning = FALSE}
+# Load packages
+library(readxl) # for reading in files
+library(openxlsx) # for writing excel files
+library(purrr) # for summary stats
+library(tidyverse) # for data organization and manipulation
+library(ggrepel) # for ggplot text labels
+library(eulerr) # for venn diagrams
+library(cowplot) # for plot themes
+library(janitor) # for df cleaning
+
+# Read in files.
+original_proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
+demographics <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/Demographics_Data_R.xlsx")
+```
+
+# Import data and perform initial cleaning steps
+```{r}
+proteomics_df = original_proteomics_df %>%
+  separate(Subject_ID, c("Responder_Status", "ID"), sep = "_") %>%   
+  separate(Sample_ID, c("Pre_Post", NA), sep = "_") %>% 
+  separate(Protein_Name, c("Protein_Name", NA), sep = "_") %>% 
+  rename("Non_Imputed_Intensity" = "Intensity") %>% 
+  rename("Intensity" = "Imputed_Norm_Intensity") 
+
+# We will only study log2 transformed data.
+proteomics_df$Log2_Intensity <- log2(proteomics_df$Intensity)
+
+# Merge proteomics data with the demographics data.
+proteomics_df <- merge(proteomics_df, demographics, by = "ID")
+
+head(proteomics_df)
+```
+
+Make a smaller dataframe to use for future plots.
+```{r}
+proteomics_short <- proteomics_df %>% 
+  select(c(ID, Protein_Name, Pre_Post, Log2_Intensity, Sex)) %>% 
+  pivot_wider(names_from = Pre_Post, values_from = Log2_Intensity)
+
+# Save dataframe 
+write.xlsx(proteomics_short,"../output_FINAL/proteomics_short_11.06.2023.xlsx")
+```
+
+Separate into two data frames: one for Pre intensity and another for Post intensity. 
+```{r}
+pre <- proteomics_df %>%
+  filter(Pre_Post == "Pre") %>% 
+  pivot_wider(names_from = Pre_Post, values_from = Log2_Intensity)
+
+post <- proteomics_df %>%
+  filter(Pre_Post == "Post") %>% 
+  pivot_wider(names_from = Pre_Post, values_from = Log2_Intensity)
+```
+
+# Test for normality and homogeneity of variances
+
+Create a new df holding Pre- and Post- protein intensity values and make a new column subtracting Pre- from Post-.
+```{r}
+pre_short <- select(pre, c(ID, Protein_Name, Pre))
+post_short <- select(post, c(ID, Protein_Name, Post))
+
+# Merge the new ds together.
+Var_Test <- merge(pre_short, post_short, by = c("ID", "Protein_Name"))
+
+# Create a new column that determines the Post minus Pre intensity for each protein across each subject.
+Var_Test$Delta <- (Var_Test$Post - Var_Test$Pre)
+```
+
+## Perform the Shapiro-Wilk test and F-Test
+
+Shapiro-Wilk test: if the test is non-significant (p>.05) it tells us that the distribution of the sample is not significantly different from a normal distribution.
+
+F-test: using var.test(), if the p-value > 0.05 significance, there is no significant difference between the two variances.
+```{r}
+# The 'proteins' list will hold unique protein names that we will use for the upcoming loop function.
+proteins <- unique(proteomics_df$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+SW.F_Res <- data.frame()
+
+for (i in 1:length(proteins)) {
+ 
+  # Select only protein[i] 
+  Prot_Filtered <- Var_Test %>%
+    filter(Protein_Name == proteins[i])
+  
+  # Run the Shapiro-Wilk test across the mean protien 'Delta' from Pre and Post across all subjects
+  SW <- shapiro.test(Prot_Filtered$Delta)
+  
+  # Run the F-test across mean Pre and Post across all subjects
+  F_test <- var.test(Prot_Filtered$Pre, Prot_Filtered$Post)
+  
+  # Isolate the p-value list from each test.
+  SW_pval <- SW$p.value
+  
+  F_pval <- F_test$p.value
+  
+  # Isolating proteins names to include in the final df.
+  Protein_Name <- proteins[i] 
+  
+  # Merge the Protein names and p-values into a new df.
+  res <- data.frame(Protein_Name, SW_pval, F_pval)
+  
+  # Merge the 'res' df with the empty dataframe 'Var_Res'.
+  SW.F_Res <- rbind(res, SW.F_Res)
+  
+}
+
+# Make a column that indicates if each protein has normal distribution.
+SW.F_Res$Normal_Dist <- 
+  case_when(
+    SW.F_Res$SW_pval < 0.05 ~ "No",
+    SW.F_Res$SW_pval > 0.05 ~ "Yes")
+
+# Make a column that indicates if each protein has significant difference between the Pre and Post variances.
+SW.F_Res$Homogeneity <- 
+  case_when(
+    SW.F_Res$F_pval < 0.05 ~ "No",
+    SW.F_Res$F_pval > 0.05 ~ "Yes")
+
+# Save results.
+write.xlsx(SW.F_Res,"../output_FINAL/SW_and_F.Test_Results_11.06.2023.xlsx")
+```
+
+## Assessing normality and homogeneity of variance 
+
+Determine how many proteins have variances that are normally distributed and exhibit homogeneity of variance.
+```{r}
+# Number of normally distributed proteins.
+length(which(SW.F_Res$Normal_Dist == "Yes")) # 1553 proteins are normally distributed
+length(which(SW.F_Res$Normal_Dist == "No")) # 301 proteins are not normally distributed.
+
+# Number of proteins that exhibit homogeneity of variance.
+length(which(SW.F_Res$Homogeneity == "Yes")) # 1794 proteins exhibit homogeneity of variance
+length(which(SW.F_Res$Homogeneity == "No")) # 60 proteins exhibit homogeneity of variance
+
+# How many proteins answer "Yes" to each condition: 
+length(which(SW.F_Res$Normal_Dist == "Yes" & SW.F_Res$Homogeneity == "Yes")) # 1508 Proteins.
+
+# How many proteins answer "no" to each condition:
+length(which(SW.F_Res$Normal_Dist == "No" & SW.F_Res$Homogeneity == "No")) # 15 Proteins.
+
+# A majority of proteins exhibit normal distribution and homogeneity of variance. We will proceed with statistical testing that assumes normality.
+```
+
+## Aggregate Summary Statistics
+
+Create dataframes holding means and standard deviations of all subjects Pre- and Post-.
+
+First, generate means and sds of each protein Pre- and Post- separately.
+```{r}
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_df$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+Prot_Means <- data.frame()
+
+for (i in 1:length(proteins)) {
+  
+  Pre_Filtered <- pre %>%
+    filter(Protein_Name == proteins[i])
+  
+  Post_Filtered <- post %>%
+    filter(Protein_Name == proteins[i])
+  
+  # Make list objects that hold the mean and sd values.
+  Pre_Mean_Intensity <- mean(Pre_Filtered$Intensity)
+  Pre_SD <- sd(Pre_Filtered$Intensity)
+  
+  Post_Mean_Intensity <- mean(Post_Filtered$Intensity)
+  Post_SD <- sd(Post_Filtered$Intensity)
+  
+  # Isolating proteins names to include in the final df.
+  Protein_Name <- proteins[i] 
+  
+  # Merge the Protein names with means and sds into a new df.
+  res <- data.frame(Protein_Name, Pre_Mean_Intensity, Pre_SD, Post_Mean_Intensity, Post_SD)
+  
+  # Merge the res df with the empty df.
+  Prot_Means <- rbind(res, Prot_Means)
+  
+}
+
+head(Prot_Means)
+
+# Save results.
+write.xlsx(Prot_Means, "../output_FINAL/Prot_Means_11.06.2023.xlsx")
+```
+
+# T-Tests and Fold Change Calculations
+
+## T-Tests
+T-tests comparing the **Pre** intensity of each protein for male vs female subjects. 
+```{r}
+# Make new dfs that isolate for only males or females.
+M_pre <- pre %>% 
+  filter(Sex == "M")
+
+F_pre <- pre %>% 
+  filter(Sex == "F")
+
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_df$Protein_Name)
+
+#create an empty dataframe for the loop function to place values into.
+Pre_MvF_mean_ttest <- data.frame()
+
+for (i in 1:length(proteins)) {
+
+  M_pre_t <- M_pre %>%
+    filter(Protein_Name == proteins[i])
+  
+  F_pre_t <- F_pre %>%
+    filter(Protein_Name == proteins[i])
+  
+  # Make list objects that hold the mean and sd values.
+  M_Pre_Mean <- mean(M_pre_t$Pre)
+  M_Pre_SD <- sd(M_pre_t$Pre)
+  
+  F_Pre_Mean <- mean(F_pre_t$Pre)
+  F_Pre_SD <- sd(F_pre_t$Pre)
+  
+  # Perform the T-Test
+  ttest_M.F <- t.test(M_pre_t$Pre, F_pre_t$Pre)
+
+  # Isolate p-values.
+  pval_M.F <- ttest_M.F$p.value
+
+  # Isolating proteins names to include in the final df.
+  Protein_Name <- proteins[i] 
+  
+  # Merge the Protein names and p-values into a new df.
+  res <- data.frame(Protein_Name, M_Pre_Mean, M_Pre_SD, F_Pre_Mean, F_Pre_SD, pval_M.F)
+  
+  # Merge the res df with the empty df.
+  Pre_MvF_mean_ttest <- rbind(res, Pre_MvF_mean_ttest)
+  
+}
+
+# FDR
+Pre_MvF_mean_ttest$p.adj <-  p.adjust(Pre_MvF_mean_ttest$pval_M.F, "fdr")
+
+# Save results.
+write.xlsx(Pre_MvF_mean_ttest,"../output_FINAL/Pre_MvF_mean_ttest_11.06.2023.xlsx")
+```
+
+This loop will also generate T-tests across each protein for Pre **and** Post across all subjects and also also stratifying by sex. Final df will include means and sds as well.
+```{r}
+# Make new dfs that isolate for only males or females.
+M_pre.post <- proteomics_short %>% 
+  filter(Sex == "M")
+
+F_pre.post <- proteomics_short %>% 
+  filter(Sex == "F")
+
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_df$Protein_Name)
+
+#create an empty dataframe for the loop function to place values into.
+ttest_mean_res <- data.frame()
+
+for (i in 1:length(proteins)) {
+  
+  # Isolate data only for the relevant Protein_Name in the loop.
+  All_filtered <- proteomics_short %>% 
+    filter(Protein_Name == proteins[i])
+ 
+  M_filtered <- M_pre.post %>%
+    filter(Protein_Name == proteins[i])
+  
+  F_filtered <- F_pre.post %>%
+    filter(Protein_Name == proteins[i])
+  
+  # Make list objects that hold the mean and sd values.
+  Pre_Mean <- mean(All_filtered$Pre)
+  Pre_SD <- sd(All_filtered$Pre)
+  
+  Post_Mean <- mean(All_filtered$Post)
+  Post_SD <- sd(All_filtered$Post)
+  
+  M_Pre_Mean <- mean(M_filtered$Pre)
+  M_Pre_SD <- sd(M_filtered$Pre)
+  M_Post_Mean <- mean(M_filtered$Post)
+  M_Post_SD <- sd(M_filtered$Pre)
+  
+  F_Pre_Mean <- mean(F_filtered$Pre)
+  F_Pre_SD <- sd(F_filtered$Pre)
+  F_Post_Mean <- mean(F_filtered$Post)
+  F_Post_SD <- sd(F_filtered$Post)
+  
+  # Runs T-tests on Pre vs Post across all subjects, then Pre vs Post by sex.
+  All_ttest <- t.test(All_filtered$Pre, All_filtered$Post, paired = TRUE)
+  M_ttest <- t.test(M_filtered$Pre, M_filtered$Post, paired = TRUE)
+  F_ttest <- t.test(F_filtered$Pre, F_filtered$Post, paired = TRUE)
+
+  # Isolate p-value from ttest_res to place in ttest_pre.post later in the chunk.
+  Pval <- All_ttest$p.value
+  M_Pval <- M_ttest$p.value
+  F_Pval <- F_ttest$p.value
+
+  # This list will be used to add the appropriate protein name to ttest_pre.post.
+  Protein_Name <- proteins[i] 
+  
+  # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
+  res <- data.frame(Protein_Name, Pre_Mean, Pre_SD, Post_Mean, Post_SD, Pval, M_Pre_Mean, M_Pre_SD, M_Post_Mean, M_Post_SD, M_Pval, F_Pre_Mean, F_Pre_SD, F_Post_Mean, F_Post_SD, F_Pval)
+  
+  ttest_mean_res <- rbind(res, ttest_mean_res)
+  
+}
+
+ttest_mean_res$p.adj <-  p.adjust(ttest_mean_res$Pval, "fdr")
+ttest_mean_res$M_p.adj <-  p.adjust(ttest_mean_res$M_Pval, "fdr")
+ttest_mean_res$F_p.adj <-  p.adjust(ttest_mean_res$F_Pval, "fdr")
+
+# Save results.
+write.xlsx(ttest_mean_res,"../output_FINAL/T.Tests_Means_Pre.Post_Complete_06.04.2024.xlsx")
+```
+
+## Fold changes
+
+Fold change is defined as FC = Log2(post) - Log2(pre), or in this case FC = post - pre since our data are already log2 transformed.
+
+I will create a df that determines the FC of each protein across each person. I will use this df in future code chunks to summarize the FCs by different metrics.
+```{r}
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_df$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+FC_Complete <- data.frame()
+ 
+for (i in 1:length(proteins)) {
+  
+  # Isolate data only for the relavent Protein_Name in the loop.
+  All_filtered <- proteomics_short %>% 
+    filter(Protein_Name == proteins[i])
+  
+  # Calculate the FC  
+  FC <- All_filtered$Post - All_filtered$Pre
+
+  # This list will be used to add the appropriate protein name to ttest_pre.post.
+  Protein_Name <- proteins[i] 
+  
+  # I will want the ID across each protein FC labeled   
+  ID <- All_filtered %>% 
+    select("ID", "Sex") %>% 
+    unique()
+  
+  # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
+  res <- data.frame(ID, Protein_Name, FC)
+
+  FC_Complete <- rbind(res, FC_Complete)
+  
+}  
+
+# Save results.
+write.xlsx(FC_Complete,"../output_FINAL/FC_Complete_11.08.2023.xlsx")
+```
+
+Now we will generate the FC means across different categories.
+```{r}
+# This df will hold the FC means and SDs across all proteins 
+FC_Mean <- FC_Complete %>% 
+  group_by(Protein_Name) %>% 
+  summarise(
+    FC_Mean = mean(FC),
+    SD = sd(FC)) %>% 
+  select(c(Protein_Name, FC_Mean, SD))
+
+# This df will hold the FC means and SDs across all proteins by sex stratification
+FC_Sex <- FC_Complete %>% 
+  group_by(Sex, Protein_Name) %>% 
+  summarise(
+    .groups = 'drop',
+    FC_Mean = mean(FC),
+    SD = sd(FC)) %>% 
+  pivot_wider(names_from = Sex,
+              values_from = c(FC_Mean, SD)) %>% 
+  rename("F_FC_Mean" = "FC_Mean_F", 
+         "F_SD" = "SD_F", 
+         "M_FC_Mean" = "FC_Mean_M", 
+         "M_SD" = "SD_M")
+```
+
+Now we will attach the FC means to the the p-values generated from the T-Test loop.
+```{r}
+# Isolate P-values 
+Pval <- ttest_mean_res %>% 
+  select(c(Protein_Name, Pval, p.adj))
+
+# Merge the FC means and p-values.
+FC_Mean <- merge(FC_Mean, Pval, by = "Protein_Name")
+
+# Isolate P-values corresponding to males and females
+Pval_Sex <- ttest_mean_res %>% 
+  select(c(Protein_Name, F_Pval, F_p.adj, M_Pval, M_p.adj))
+
+# Merge the FC means and p-values.
+FC_Sex <- merge(FC_Sex, Pval_Sex, by = "Protein_Name")
+
+# Reorder the columns in FC_Sex
+FC_Sex <- FC_Sex %>% 
+  select(Protein_Name, M_FC_Mean, M_SD, M_Pval, M_p.adj, F_FC_Mean, F_SD, F_Pval, F_p.adj)
+
+# View dfs  
+head(FC_Mean)
+
+head(FC_Sex)
+
+# Save results.
+write.xlsx(FC_Mean,"../output_FINAL/FC_Mean_Pval_06.04.2023.xlsx")
+write.xlsx(FC_Sex,"../output_FINAL/FC_Sex_Mean_Pval_06.04.2023.xlsx")
+```
+
+Make separate dfs for labeling proteins in the volcano plots.
+```{r}
+# All subjects
+FC_Mean_Top <- FC_Mean %>% # Select for proteins with pval <0.05 and order by the largest FCs
+  filter(Pval < 0.05) %>% 
+  arrange(desc(abs(FC_Mean)))
+
+All_Top10 <- FC_Mean_Top[1:10,] # Select the top 10 proteins
+unlist(All_Top10$Protein_Name) # "CXCL6" "MARCO" "GFRP"  "NCEH1" "GPDA"  "PPA5"  "TFR1"  "NNRE"  "ACOC"  "TGM2" 
+
+# Male subjects only
+FC_Male_Top <- FC_Sex[,1:5] # Select just the male cols
+FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest FCs
+  filter(M_Pval < 0.05) %>% 
+  arrange(desc(abs(M_FC_Mean)))
+
+Male_Top10 <- FC_Male_Top[1:10,] # Select the top 10 proteins
+unlist(Male_Top10$Protein_Name) # "AT2A2" "NCEH1" "AL3A2" "MARCO" "GPDA"  "ACOC"  "TFR1"  "PPA5"  "EST1"  "RS24"  
+
+# Female subjects only
+FC_Female_Top <- FC_Sex[,c(1, 6:9)] # Select just the female cols
+FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and order by the largest FCs
+  filter(F_Pval < 0.05) %>% 
+  arrange(desc(abs(F_FC_Mean)))
+
+Female_Top10 <- FC_Female_Top[1:10,] # Select the top 10 proteins
+unlist(Female_Top10$Protein_Name) # "K2C80" "PLAK"  "CXCL6" "FILA2" "AIF1"  "K1C14" "SPB12" "GFRP"  "RNAS2" "UTER"  
+
+```
+
+
+# Volcano plots - fold change
+
+Generate volcano plots that show upregulated and downregulated proteins across all subjects.
+Only FCs with a p<0.05 will be considered significant.
+```{r}
+# Create an object holding the pathway to save the plots into
+plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL"
+
+# Add a column of NAs
+FC_Mean$diffexpressed <- "Not Significant"
+
+# If FC > 0 and pvalue < 0.05, set as "Up" 
+FC_Mean$diffexpressed[FC_Mean$FC_Mean > 0 & FC_Mean$Pval < 0.05] <- "Up"
+
+# If FC < 0 and pvalue < 0.05, set as "Down"
+FC_Mean$diffexpressed[FC_Mean$FC_Mean < 0 & FC_Mean$Pval < 0.05] <- "Down"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+FC_Mean$delabel <- NA
+FC_Mean$delabel[FC_Mean$diffexpressed != "Not Significant"] <- FC_Mean$Protein_Name[FC_Mean$diffexpressed != "Not Significant"]
+
+# Create the plot
+FC_Volcano <- FC_Mean %>% 
+  ggplot(
+    aes(x = FC_Mean, y = -log10(Pval), col = diffexpressed, label = delabel)) +
+        geom_point() + 
+        scale_color_manual(values = c("blue", "red", "gray") , breaks = c("Down", "Up", "Not Significant")) +
+        
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+        geom_text_repel(data = FC_Mean %>% 
+            filter(Protein_Name %in% c("CXCL6", "MARCO", "GFRP",  "NCEH1", "GPDA",  "PPA5",  "TFR1",  "NNRE",  "ACOC",  "TGM2" ))) + 
+
+        xlim(-1.2, 1.2) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 3.5)) +
+  
+        labs(y = "-Log10(P-value)", x = "Log2(Fold Change)") +
+        ggtitle("Pre vs 24hr Post") +
+        
+        theme_cowplot(12) +
+
+        theme(
+          axis.line = element_line(colour = "black"), 
+          
+          axis.text = element_text(size = 15) , 
+          axis.title  = (element_text(size = 17)),
+          axis.title.x = element_text(margin = margin(t = 15)), 
+          axis.title.y = element_text(margin = margin(r = 15)),
+          
+          plot.title = element_text(size = 25, face = "bold", hjust = 0.5),           
+          
+          legend.title = element_blank(),
+          legend.text = element_text(size = 13))           
+ 
+FC_Volcano
+
+ggsave(
+  "FC_Volcano_06.07.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 6.5,
+  height = 5.25,
+  dpi = 1200
+)
+```
+
+Generate volcano plots that show upregulated and dowregulated proteins stratified by Males and Females.
+Only FCs with a p<0.05 will be considered significant.
+```{r}
+# Select for male subjects.
+M_FC <- FC_Sex %>% 
+   select(c(Protein_Name, M_FC_Mean, M_Pval))
+
+# Add a column of NAs
+M_FC$diffexpressed <- "Not Significant"
+
+# If FC > 0 and pvalue < 0.05, set as "Up" 
+M_FC$diffexpressed[M_FC$M_FC_Mean > 0 & M_FC$M_Pval < 0.05] <- "Up"
+
+# If FC < -0.6 and pvalue < 0.05, set as "Down"
+M_FC$diffexpressed[M_FC$M_FC_Mean < 0 & M_FC$M_Pval < 0.05] <- "Down"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+M_FC$delabel <- NA
+M_FC$delabel[M_FC$diffexpressed != "Not Significant"] <- M_FC$Protein_Name[M_FC$diffexpressed != "Not Significant"]
+
+# Create the plot
+M_Volcano <- M_FC %>% 
+  ggplot(
+    aes(x = M_FC_Mean, y = -log10(M_Pval), col = diffexpressed, label = delabel)) +
+        geom_point() +
+        scale_color_manual(values = c("blue", "red", "gray") , breaks = c("Down", "Up", "Not Significant")) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+       
+        geom_text_repel(data = M_FC %>% 
+          filter(Protein_Name %in% c("AT2A2", "NCEH1", "AL3A2", "MARCO", "GPDA", "ACOC",  "TFR1",  "PPA5",  "EST1",  "RS24"))) + 
+  
+        xlim(-2, 2) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 3.4)) +
+
+        labs(y = "-Log10(P-value)", x = "Log2(Fold Change)") +
+        ggtitle("Males") +
+  
+        theme_cowplot(12) +
+
+        theme(
+          axis.line = element_line(colour = "black"), 
+          
+          axis.text = element_text(size = 15) , axis.title  = (element_text(size = 17)),
+          axis.title.x = element_text(margin = margin(t = 15)), 
+          axis.title.y = element_text(margin = margin(r = 15)),
+          
+          plot.title = element_text(size = 25, face = "bold", hjust = 0.5),  
+          
+          legend.text = element_text(size = 13),            
+          legend.title = element_blank()) 
+M_Volcano
+
+ggsave(
+  "M_FC_Volcano_06.07.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 6.5,
+  height = 5.25,
+  dpi = 1200
+)
+```
+
+```{r}
+# Select for females subjects
+F_FC <- FC_Sex %>% 
+   select(c(Protein_Name, F_FC_Mean, F_Pval))
+
+# add a column of NAs
+F_FC$diffexpressed <- "Not Significant"
+
+# If FC > 0 and pvalue < 0.05, set as "Up" 
+F_FC$diffexpressed[F_FC$F_FC_Mean > 0 & F_FC$F_Pval < 0.05] <- "Up"
+
+# If log2Foldchange < 0 and pvalue < 0.05, set as "Down"
+F_FC$diffexpressed[F_FC$F_FC_Mean < 0 & F_FC$F_Pval < 0.05] <- "Down"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+F_FC$delabel <- NA
+F_FC$delabel[F_FC$diffexpressed != "Not Significant"] <- F_FC$Protein_Name[F_FC$diffexpressed != "Not Significant"]
+
+# Create the plot.
+F_Volcano <- F_FC %>% 
+  ggplot(
+    aes(x = F_FC_Mean, y = -log10(F_Pval), col = diffexpressed, label = delabel)) +
+        geom_point() + 
+        scale_color_manual(values = c("blue", "red", "gray") , breaks = c("Down", "Up", "Not Significant")) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+
+        geom_text_repel(data = F_FC %>% 
+          filter(Protein_Name %in% c("K2C80", "PLAK",  "CXCL6", "FILA2", "AIF1",  "K1C14", "SPB12", "GFRP",  "RNAS2", "UTER"))) + 
+  
+        xlim(-2, 2) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 3.4)) +
+  
+        labs(y = "-Log10(P-value)", x = "Log2(Fold Change)") +
+        ggtitle("Females") +
+        
+        theme_cowplot(12) +
+          
+        theme(
+          axis.line = element_line(colour = "black"), 
+          
+          axis.text = element_text(size = 15) , axis.title  = (element_text(size = 17)),
+          axis.title.x = element_text(margin = margin(t = 15)), 
+          axis.title.y = element_text(margin = margin(r = 15)),
+          
+          plot.title = element_text(size = 25, face = "bold", hjust = 0.5),     
+          
+          legend.text = element_text(size = 13),            
+          legend.title = element_blank()) 
+F_Volcano
+
+ggsave(
+  "F_FC_Volcano_06.07.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 6.5,
+  height = 5.25,
+  dpi = 1200
+)
+```
+
+Venn Diagram depicting the the overlapping significant proteins
+```{r}
+# First, we must determine the number of proteins that overlap and are unique to each sex.
+dim(FC_Male_Top) # Males: 111 significant proteins
+M_Down <- FC_Male_Top %>% filter(M_FC_Mean < 0)   # Males: 101 significant down proteins
+M_Up <- FC_Male_Top %>% filter(M_FC_Mean > 0) # Males: 10 significant up proteins
+
+dim(FC_Female_Top) # Females: 6 significant proteins
+F_Down <- FC_Female_Top %>% filter(F_FC_Mean < 0) # Females: 57 significant down proteins
+Fe_Up <- FC_Female_Top %>% filter(F_FC_Mean > 0) # Females: 11 significant up proteins.
+
+Both_Down <- merge(M_Down, F_Down) # 6 down proteins
+Both_Up <- merge(M_Up, Fe_Up) # 0 proteins...up proteins from each sex are unique
+
+# Eulerr plot
+
+###### Down #####
+Down <- euler(c(
+  "A" = 95,
+  "B" = 51, 
+  "A&B" = 6
+))
+
+png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL/M.F_down overlap.png",
+  width = 800,
+  height = 500,
+  res = 100) # The height of the plot in inches
+
+v <- plot(Down, 
+     labels = list(labels = c("Males", "Females", ""), cex = 1.5),
+     edges = list(lty = 1:3),
+     fills = c("lightblue", "lightpink", "darkseagreen2"),
+     alpha = 0.7,
+     quantities = list(type = "counts", cex = 1.5))
+
+tags <- v$children[[1]]$children[[1]]$children$tags$children
+
+tags <- do.call(grid::gList, lapply(tags, function(x) {
+  x$children[[2]]$label <- sub(" \\(", "\n(", x$children[[2]]$label)
+  x$children[[2]]$just <- NULL
+  x$children[[2]]$hjust <- 0.5
+  x$children[[2]]$vjust <- 1
+  x}))
+
+v$children[[1]]$children[[1]]$children$tags$children <- tags
+
+v
+
+dev.off()
+
+####### Up #######
+Up <- euler(c(
+  "A" = 10,
+  "B" = 11,
+  "A&B" = 0
+))
+
+png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL/M.F_up overlap.png",
+  width = 800,
+  height = 500,
+  res = 100) # The height of the plot in inches
+
+v <- plot(Up, 
+     labels = list(labels = c("Males", "Females", ""), cex = 1.5),
+     edges = list(lty = 1:3),
+     fills = c("lightblue", "lightpink", "darkseagreen2"),
+     alpha = 0.7,
+     quantities = list(type = "counts", cex = 1.5))
+
+tags <- v$children[[1]]$children[[1]]$children$tags$children
+
+tags <- do.call(grid::gList, lapply(tags, function(x) {
+  x$children[[2]]$label <- sub(" \\(", "\n(", x$children[[2]]$label)
+  x$children[[2]]$just <- NULL
+  x$children[[2]]$hjust <- 0.5
+  x$children[[2]]$vjust <- 1 
+  x}))
+
+v$children[[1]]$children[[1]]$children$tags$children <- tags
+
+v
+
+dev.off()
+```
+
+
+# Aggregate Pathway Enrichment Figures
+
+Import data files.
+```{r}
+# Read in files
+canon_down <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/UPDATED Pre vs Post canonical pathways IPA.xls", sheet = "R_data_down")
+canon_up <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/UPDATED Pre vs Post canonical pathways IPA.xls", sheet = "R_data_up")
+cell_funct <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/UPDATED Pre vs Post diseases and functions.xls", sheet = "R_data")
+M.F <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/IPA MvF Pathways.xlsx", sheet = "R_data")
+
+```
+
+## Bar graphs 
+
+Bar graphs of top down and up regulated IPA canonical pathways from Pre vs Post comparison.
+I cut this" colour = 
+          c("black",  "black", "slateblue", "slateblue",  "aquamarine4", 
+                      "aquamarine4", "slateblue", "slateblue", "aquamarine4", "black")," from the text.color
+```{r}
+# I will represent this graph using log2 p-values, therefore I will multiply the Neg_Log_P.value by -1.
+canon_down$Log_P.value <- -1 * canon_down$Neg_Log_P.value
+
+# Selecting for the top 10 most downregulated pathways.
+Top_Ten_Down <- canon_down %>% 
+  filter(Log_P.value < 0) %>% 
+  slice_head(n = 10)
+
+# Adjusting the pathways names to fit on plot.
+Top_Ten_Down$Ingenuity_Canonical_Pathways[Top_Ten_Down$Ingenuity_Canonical_Pathways == "Fcγ Receptor-mediated Phagocytosis in Macrophages and Monocytes"] <- 
+  "Fcγ Receptor-mediated Phagocytosis \nin Macrophages & Monocytes"
+
+Top_Ten_Down$Ingenuity_Canonical_Pathways[Top_Ten_Down$Ingenuity_Canonical_Pathways == "Cardiac Hypertrophy Signaling (Enhanced)"] <- 
+  "Cardiac Hypertrophy Signaling"
+
+# Create plot.
+plot_canon_down <- Top_Ten_Down %>% 
+  ggplot(aes(x = Log_P.value, y = reorder(Ingenuity_Canonical_Pathways, -Log_P.value), fill = Z_Score )) +
+  geom_bar(colour="black", stat = "identity", width = 0.6) +
+
+  scale_fill_gradient(guide = guide_colorbar(frame.colour = "black")) +
+
+  scale_x_continuous(limits = c(-50, 0), expand = c(0, 0)) +
+  scale_y_discrete(position = "right") +
+  
+  labs(title = "Predicted Inhibited \nCanonical Pathways", x = "log(p-value)", fill = "Z-Score") +
+  theme_cowplot(12) +
+
+  theme(
+        axis.line = element_line(colour = "black"), 
+        
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 27),
+        
+        axis.title.y = element_blank(), 
+        axis.text.y = element_text(size = 25),
+        
+        axis.text.x = element_text(colour = "black", size = 25), 
+        axis.title.x = element_text(size = 25), 
+        
+        legend.position = "left",
+        legend.title = element_text(size = 25),
+        legend.text = element_text(size = 18),
+        legend.key.size = unit(8, 'mm') 
+        ) 
+plot_canon_down  
+
+ggsave(
+  "Pre_vs_Post_downreg_canon_06.12.2024.jpg",
+  plot = last_plot(),
+  path = plot.path,
+  width = 15,
+  height = 8, 
+  dpi = 1200)
+
+```
+
+```{r}
+# Selecting for the top 10 most upregulated pathways.
+Top_Ten_Up <- canon_up %>% 
+  slice_head(n = 10)
+
+# Adjusting the pathways names to fit on plot.
+Top_Ten_Up$Ingenuity_Canonical_Pathways[Top_Ten_Up$Ingenuity_Canonical_Pathways == "IL-12 Signaling and Production in Macrophages"] <- 
+  "IL-12 Signaling and Production \nin Macrophages"
+
+# Create the plot.
+plot_canon_up <- Top_Ten_Up %>% 
+  ggplot(aes(x = Neg_Log_P.value, y = reorder(Ingenuity_Canonical_Pathways, Neg_Log_P.value), fill = Z_Score )) +
+  geom_bar(colour="black", stat = "identity", width = 0.6) +
+  scale_fill_gradient(low = "lightpink", high = "red3", guide = guide_colorbar(frame.colour = "black")) +
+  
+  scale_x_continuous(limits = c(0,15), expand = c(0, 0)) +
+
+  labs(title = "Predicted Upregulated \nCanonical Pathways", x = "-log(p-value)", fill = "Z-Score") +
+  
+  theme_cowplot(12) +
+ 
+  theme(
+        axis.line = element_line(colour = "black"), 
+        
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 27),
+        axis.title.y = element_blank(), 
+        axis.text.y = element_text(colour = "black", size = 25),
+        axis.title.x = element_text(size = 25), 
+        axis.text.x = element_text(colour = "black", size = 25),
+        
+        legend.title = element_text(size = 25),
+        legend.text = element_text(size = 18),
+        legend.key.size = unit(8, 'mm')
+        ) 
+plot_canon_up
+  
+ggsave(
+  "Pre_vs_Post_upreg_canon_06.07.2024.jpg",
+  plot = last_plot(),
+  path = plot.path,
+  width = 10,
+  height = 8,
+  dpi = 1200)
+
+```
+
+Bar plot that shows the predicted down regulated pathways related to cell movement and inflammatory response Pre vs Post.
+```{r}
+# Reordering the levels, first by category, then by the # of molecules in each function
+cell_funct$Functions <- factor(cell_funct$Functions,
+                        levels = c("Recruitment of neutrophils",
+                                   "Response of macrophages",
+                                   "Activation of phagocytes",
+                                   "Phagocytosis",
+                                   "Activation of leukocytes",
+                                   "Chemotaxis",
+                                   "Cell movement of myeloid cells",
+                                   "Leukocyte migration",
+                                   "Invasion of cells",
+                                   "Migration of cells"
+                                   ))
+
+# Create Plot.
+Pathway_Plot <- cell_funct %>% 
+  ggplot(aes(x = Functions, y = Num_Molecules, fill = Category)) +
+  geom_bar(color = "black", stat = "identity", width = 0.6) +
+  
+  scale_fill_manual(values = c("aquamarine4", "slateblue")) +
+  
+  scale_y_reverse(expand = c(0, 0), limits = c(650, 0)) +
+  scale_x_discrete(position = "top") +
+  
+  labs(title = "Predicted Inhibited \nPathways", y = "# of Molecules") +
+  
+  theme_cowplot(12) +
+  
+  theme(
+        axis.line = element_line(colour = "black"), 
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 27),
+        axis.title.y = element_blank(), 
+        axis.text.y = element_text(colour = "black", size = 25),
+        axis.title.x = element_text(colour = "black", size = 25, vjust = -0.5), 
+        axis.text.x = element_text(colour = "black", size = 25),
+        
+        legend.position = "left",
+        legend.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.key.size = unit(8, 'mm')) +
+  
+  coord_flip() 
+Pathway_Plot  
+  
+ggsave(
+  "Pre_vs_Post_predicted_downreg_pathways_06.07.2024.jpg",
+  plot = last_plot(),
+  path = plot.path,
+  width = 18,
+  height = 8,
+  dpi = 1200)
+```
+
+Grouped bar plot to demonstrate the differences in pathway in inhibition between males and females
+```{r}
+# Using as.factor() to create a new col with the same pathways names, but adjusted with \n for the plot.
+M.F$Pathway2 <- as.factor(c(
+  "EIF2 Signaling",
+  "Acute Phase \nResponse Signaling",
+  "Production of NO and \nROS in Macs & Monocytes",
+  "Leukocyte Extravasation \nSignaling",
+  "Synaptogenesis \nSignaling",
+  "EIF2 Signaling",
+  "Acute Phase \nResponse Signaling",
+  "Production of NO and \nROS in Macs & Monocytes",
+  "Leukocyte Extravasation \nSignaling",
+  "Synaptogenesis \nSignaling"))
+
+# Create plot.
+sex_plot <- M.F %>% 
+  ggplot(aes(x = reorder(Pathway2, Difference), y = Z_Score, fill = Sex, color = Sex)) +
+  geom_col(position = position_dodge(0.8), size = 1.1, width = 0.65) +
+  
+  scale_fill_manual(labels = c("Females", "Males"), values = c("mediumorchid2", "steelblue2")) +
+  scale_color_manual(values = c("mediumorchid4", "steelblue4"), guide = "none") +
+  
+  guides(fill = guide_legend(reverse=TRUE)) +
+  
+  scale_x_discrete(position = "top") +
+  scale_y_continuous(expand = c(0, 0), limits = c(-8, 0)) +
+  
+  labs(title = "Canonical Pathways", x = "", y = "Z-Score", fill = "Z-Score") +
+  
+  theme_cowplot(12) +
+  
+  theme(
+        axis.line = element_line(colour = "black"), 
+        
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 27),
+        axis.title.y = element_blank(), 
+        axis.text.y = element_text(colour = "black", size = 25),
+        axis.title.x = element_text(colour = "black", size = 25, vjust = -0.5), 
+        axis.text.x = element_text(colour = "black", size = 25),
+        
+        legend.position = "left",
+        legend.title = element_text(size = 25),
+        legend.text = element_text(size = 25),
+        legend.key.size = unit(8, 'mm')) +
+  
+  coord_flip() 
+sex_plot
+
+ggsave(
+  "canon_pathway_sex_06.07.2024.jpg",
+  plot = last_plot(),
+  path = plot.path,
+  width = 15,
+  height = 8,
+  dpi = 1200)
+```
+
+
+# Analysis of cell differential data and cytokine data
+
+Clean dataframe and subset specific columns.
+```{r}
+# Read in files.
+Data <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/DEMOGRAPHICS_FINAL.xlsx", sheet = "Smokescreen_Data_R")
+
+# Remove all spaces, change all letters to lowercase, change '-' to '_'
+Data <- clean_names(Data)
+
+# Relabel the 'visit' classifications.
+Data <- Data %>% 
+  mutate(timepoint =
+           case_when(
+             visit == "Screen" ~ "Pre",
+             visit == "Post" ~ "Post_6hr",
+             visit == "FU" ~ "Post_24hr"
+           ))
+
+# Rename the m1 and m2 col names.
+Data <- Data %>% 
+  rename("percent_iNOS_sputum" = "percent_m1_sputum",
+         "percent_CD301_sputum" = "percent_m2_sputum",
+         "pmn_per_mg" = "sputum_pmn_cells_per_mg")
+
+# Select the relevant cols.
+Data <- Data %>% 
+  select(c(subject, sex, timepoint, sputum_percent_pmn, pmn_per_mg
+, il_1b_sputum, il_6_sputum, il_8_sputum, tn_fa_sputum,
+           percent_iNOS_sputum, percent_CD301_sputum, neutrophils_percentage, il_1b_serum, il_6_serum, il_8_serum,
+           tn_fa_serum))
+
+# Log2 transform all data except percentages.
+cols <- c("pmn_per_mg", "il_1b_sputum", "il_6_sputum", "il_8_sputum", "tn_fa_sputum",
+          "il_1b_serum", "il_6_serum", "il_8_serum",
+           "tn_fa_serum")
+
+# Make a copy of my Data df for log2 transformations
+Data_Log2 <- data.frame(Data)
+
+Data_Log2[cols] <- (log2(Data_Log2[cols])) 
+Data_Log2[cols] <- Data_Log2[cols] + 8 # Transform by +8 to keep the values all positive
+
+# Some counts were zero and the log2 of 0 is undefined, so I am replacing the +/- Inf with NAs
+Data_Log2[cols][sapply(Data_Log2[cols], is.infinite)] <- NA 
+
+# Remove Post_6hr time point
+Data_Log2 <- Data_Log2 %>% filter(timepoint == "Pre" | timepoint == "Post_24hr")
+
+head(Data_Log2)
+```
+
+## 2-way ANOVAs
+
+Run 2-way anovas for each cytokine, using timepoint and sex as independent variables. Should any p<0.06, I will run a Tukey Post-Hoc test. In this analysis, I will exclude rows that contain NAs.
+```{r results = 'hide'}
+# I will make an object that will run function x across each column beginning at column 4.
+anova.results <- lapply(colnames(Data_Log2)[4:ncol(Data_Log2)], function(x) as.formula(paste0(x, " ~ timepoint * sex")))
+
+# Now, we use the lapply() to incorporate our function into the aov() and generate the summary stats for each column variable.
+# NOTE: NAs will be dropped automatically by aov()
+res <- lapply(anova.results, function(x) summary(aov(x, data = Data_Log2)))
+names(res) <- format(anova.results) 
+res
+
+# Based on out results, we can run a Tukey's Post-Hoc across The following variables:
+# sputum_percent_pmn, il_1b_sputum ,il_6_sputum , il_8_sputum , neutrophils_percentage, tn_fa_sputum 
+posthoc.results.1 <- lapply(colnames(Data_Log2)[c(4:9)], function(x) as.formula(paste0(x, " ~ timepoint * sex")))
+res.posthoc.1 <-lapply(posthoc.results.1, function(x) TukeyHSD(aov(x, data = Data_Log2)))
+names(res.posthoc.1) <- format(posthoc.results.1)
+res.posthoc.1
+```
+
+Generate summary statistics across each variable.
+```{r}
+# Make a longer format of data.
+Data_Log2_Long <- Data_Log2 %>% 
+  pivot_longer(
+    cols = sputum_percent_pmn:tn_fa_serum, 
+    names_to = "variable",
+    values_to = "value"
+  )
+
+Sum_Stats_Log2 <- Data_Log2_Long %>% 
+  group_by(variable, timepoint, sex) %>% 
+  summarise(
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    se = sd / sqrt(n),
+    .groups = 'drop'
+  )
+
+head (Sum_Stats_Log2)
+```
+
+Clean up the final df using pivot_wider() and renaming the cols.
+```{r}
+Sum_Stats_Log2_Wide <- Sum_Stats_Log2 %>% 
+ pivot_wider(names_from = timepoint, values_from = c(mean, sd, n, se)) 
+
+oldnames = c("variable", "sex", "mean_Post_24hr",  "mean_Pre", "sd_Post_24hr", 
+             "sd_Pre", "n_Post_24hr",  "n_Pre", "se_Post_24hr",  "se_Pre")
+
+newnames = c("Variable", "Sex", "Post_24hr_Mean",  "Pre_Mean", "Post_24hr_SD", 
+             "Pre_SD", "Post_24hr_N",  "Pre_N", "Post_24hr_SE",  "Pre_SE")
+
+Sum_Stats_Log2_Wide <- Sum_Stats_Log2_Wide %>% rename_at(vars(oldnames), ~ newnames)
+
+# Here is the final df
+Sum_Stats_FINAL <- Sum_Stats_Log2_Wide %>% 
+  select(Variable, Sex, Pre_Mean, Pre_SD, Pre_N, Pre_SE,
+         Post_24hr_Mean, Post_24hr_SD, Post_24hr_N, Post_24hr_SE)
+
+# Save dataframe 
+write.xlsx(Sum_Stats_FINAL,"../output_FINAL/CellDiff_Cytokine_Sum_Stats_v2_02.13.2024.xlsx")
+```
+
+## Plots of cell differentials and cytokine measures
+
+Create plots that show geom_point() and geom_line() by sex across each timepoint.
+We are interested in the data with significant post.hoc results: Sputum percent PMNs, sputum PMNs per mg, IL-6, IL-8, %CD301 and %iNOS.
+
+Sputum Percent PMN
+```{r}
+# Set a path for saving plots
+plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL"
+
+PMN_1 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "sputum_percent_pmn") %>% 
+  select(Variable, Sex, Pre_Mean, Post_24hr_Mean) %>% 
+  pivot_longer(cols = c(Pre_Mean, Post_24hr_Mean),
+               names_to = "Timepoint_Mean",
+               values_to = "Mean") %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_Mean == "Pre_Mean" ~ "Pre",
+                     Timepoint_Mean == "Post_24hr_Mean" ~ "Post_24hr")) %>% 
+  select(-Timepoint_Mean)
+  
+PMN_2 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "sputum_percent_pmn") %>% 
+  select(Variable, Sex, Pre_SE, Post_24hr_SE) %>% 
+  pivot_longer(cols = c(Pre_SE, Post_24hr_SE),
+               names_to = "Timepoint_SE",
+               values_to = "SE")  %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_SE == "Pre_SE" ~ "Pre",
+                     Timepoint_SE == "Post_24hr_SE" ~ "Post_24hr")) %>% 
+  select(-Timepoint_SE)
+
+PMN_df <- merge(PMN_1, PMN_2, by = c("Variable", "Sex", "Timepoint"))
+
+###### Generate Plot
+
+new_labels <- c("Pre", "24hr Post-") # New labels for the x-axis ticks
+
+PMN_Plot <- ggplot() +
+  
+   geom_point(Data_Log2,
+     mapping = aes(x = factor(timepoint, levels = c("Pre", "Post_24hr")), 
+                   y = sputum_percent_pmn, 
+                   colour = sex), 
+                   size = 1.3,
+                   position = position_jitterdodge(dodge.width = 0.1)) + 
+  
+   geom_line(PMN_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean, 
+                   group = Sex, 
+                   color = Sex),
+                      size = 1) +
+  
+  geom_errorbar(PMN_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean,
+                   colour = Sex,
+                   ymin = Mean - SE, ymax = Mean + SE), 
+                     width = 0.2, 
+                     linewidth = 0.9) +
+  
+  scale_colour_manual(values = c("#ED68ED", "#0089FF")) +
+    xlab("Timepoint") +
+    ylab("% PMN") +
+    ggtitle("Sputum % PMN") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 100)) +
+  
+  scale_x_discrete(labels = new_labels) +
+  
+  guides(color = guide_legend(title = "Sex")) +
+  
+  coord_cartesian(clip = "off") +
+
+  theme_cowplot(12) +
+  
+  theme(
+    plot.title = element_text(hjust = 0.5, vjust = 2, size = 27, face = "bold"),
+    axis.title = element_text(size = 23, face = "bold"),
+    legend.title = element_text(size = 23, face = "bold"),
+    
+    axis.text = element_text(size = 21),
+    axis.text.x = element_text(vjust = -0.3), 
+    axis.title.x = element_text(vjust = -0.6), 
+    legend.text = element_text(size = 21),
+    
+    axis.line = element_line(colour = "black"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+PMN_Plot
+
+ggsave(
+  "Sputum Percent PMN_02.13.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 8,
+  height = 6,
+  dpi = 1200)
+
+```
+
+
+IL-8
+```{r}
+# Reformat the df 
+IL8_1 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "il_8_sputum") %>% 
+  select(Variable, Sex, Pre_Mean, Post_24hr_Mean) %>% 
+  pivot_longer(cols = c(Pre_Mean, Post_24hr_Mean),
+               names_to = "Timepoint_Mean",
+               values_to = "Mean") %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_Mean == "Pre_Mean" ~ "Pre",
+                     Timepoint_Mean == "Post_24hr_Mean" ~ "Post_24hr")) %>% 
+  select(-Timepoint_Mean)
+  
+IL8_2 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "il_8_sputum") %>% 
+  select(Variable, Sex, Pre_SE, Post_24hr_SE) %>% 
+  pivot_longer(cols = c(Pre_SE, Post_24hr_SE),
+               names_to = "Timepoint_SE",
+               values_to = "SE")  %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_SE == "Pre_SE" ~ "Pre",
+                     Timepoint_SE == "Post_24hr_SE" ~ "Post_24hr")) %>% 
+  select(-Timepoint_SE)
+
+IL8_df <- merge(IL8_1, IL8_2, by = c("Variable", "Sex", "Timepoint"))
+
+###### Genereate Plot
+new_labels <- c("Pre", "24hr Post-") # New labels for the x-axis ticks
+
+IL8_Plot <- ggplot() +
+    geom_point(Data_Log2,
+     mapping = aes(x = factor(timepoint, levels = c("Pre", "Post_24hr")), 
+                   y = il_8_sputum, 
+                   colour = sex), 
+                   position = position_jitterdodge(dodge.width = 0.1),
+                   size = 1.3) + 
+  
+  geom_line(IL8_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean, 
+                   group = Sex, 
+                   color = Sex),
+                      size = 1) +
+  
+  geom_errorbar(IL8_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean,
+                   colour = Sex,
+                   ymin = Mean - SE, ymax = Mean + SE), 
+                     width = 0.2, 
+                     linewidth = 0.9) +
+  
+  scale_colour_manual(values = c("#ED68ED", "#0089FF")) +
+    xlab("Timepoint") +
+    ylab("IL-8 (ng/mL)") +
+    ggtitle("Sputum IL-8") +
+  scale_y_continuous(expand = c(0, 0), limits = c(5, 25)) +
+    
+  scale_x_discrete(labels = new_labels) +
+
+  guides(color = guide_legend(title = "Sex")) +
+
+  theme_cowplot(12) +
+  
+  theme(
+    plot.title = element_text(hjust = 0.5, vjust = 2, size = 27, face = "bold"),
+    axis.title = element_text(size = 23, face = "bold"),
+    legend.title = element_text(size = 23, face = "bold"),
+    
+    axis.text = element_text(size = 21),
+    axis.text.x = element_text(vjust = -0.3), 
+    axis.title.x = element_text(vjust = -0.6), 
+    legend.text = element_text(size = 21),
+    
+    axis.line = element_line(colour = "black"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+IL8_Plot
+
+ggsave(
+  "IL8 Sputum_02.13.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 8,
+  height = 6,
+  dpi = 1200)
+```
+
+
+iNOS 
+```{r}
+
+iNOS_1 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "percent_iNOS_sputum") %>% 
+  select(Variable, Sex, Pre_Mean, Post_24hr_Mean) %>% 
+  pivot_longer(cols = c(Pre_Mean, Post_24hr_Mean),
+               names_to = "Timepoint_Mean",
+               values_to = "Mean") %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_Mean == "Pre_Mean" ~ "Pre",
+                        
+                     Timepoint_Mean == "Post_24hr_Mean" ~ "Post_24hr")) %>% 
+  select(-Timepoint_Mean)
+  
+iNOS_2 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "percent_iNOS_sputum") %>% 
+  select(Variable, Sex, Pre_SE, Post_24hr_SE) %>% 
+  pivot_longer(cols = c(Pre_SE, Post_24hr_SE),
+               names_to = "Timepoint_SE",
+               values_to = "SE")  %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_SE == "Pre_SE" ~ "Pre",
+                        
+                     Timepoint_SE == "Post_24hr_SE" ~ "Post_24hr")) %>% 
+  select(-Timepoint_SE)
+
+iNOS_df <- merge(iNOS_1, iNOS_2, by = c("Variable", "Sex", "Timepoint"))
+
+###### Generate Plot
+new_labels <- c("Pre", "24hr Post-") # New labels for the x-axis ticks
+
+iNOS_Plot <- ggplot() +
+    geom_point(Data_Log2,
+     mapping = aes(x = factor(timepoint, levels = c("Pre", "Post_24hr")), 
+                   y = percent_iNOS_sputum, 
+                   colour = sex), 
+                   position = position_jitterdodge(dodge.width = 0.1),
+                   size = 1.3) + 
+  
+  geom_line(iNOS_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean, 
+                   group = Sex, 
+                   color = Sex),
+                      size = 1) +
+  
+  geom_errorbar(iNOS_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean,
+                   colour = Sex,
+                   ymin = Mean - SE, ymax = Mean + SE), 
+                     width = 0.2, 
+                     linewidth = 0.9) +
+  
+  scale_colour_manual(values = c("#ED68ED", "#0089FF")) +
+    xlab("Timepoint") +
+    ylab("% iNOS+ Macs") +
+    ggtitle("Sputum % iNOS+ Macs") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 100)) +
+    
+  scale_x_discrete(labels = new_labels) +
+  
+  guides(color = guide_legend(title = "Sex")) +
+
+  theme_cowplot(12) +
+  
+  coord_cartesian(clip = "off") +
+  
+  theme(
+    plot.title = element_text(hjust = 0.5, vjust = 2, size = 27, face = "bold"),
+    axis.title = element_text(size = 23, face = "bold"),
+    legend.title = element_text(size = 23, face = "bold"),
+    
+    axis.text = element_text(size = 21),
+    axis.text.x = element_text(vjust = -0.3), 
+    axis.title.x = element_text(vjust = -0.6), 
+    legend.text = element_text(size = 21),
+    
+    axis.line = element_line(colour = "black"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+iNOS_Plot 
+
+ggsave(
+  "iNOS Sputum_02.13.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 8,
+  height = 6,
+  dpi = 1200)
+
+```
