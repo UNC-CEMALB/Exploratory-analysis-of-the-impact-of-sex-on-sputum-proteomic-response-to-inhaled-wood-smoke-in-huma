@@ -12,4 +12,6 @@ This script was generated to support the manuscript titled 'The Impact of Sex on
 # 1. Data Processing
 - Normalization, implementation of detection filters, and removal of sample outliers
 
-???
+# 2. Data Analyses and Visualization
+- Statistical analyses on proteins pre and post woodsmoke exposure comparing subject data in aggregate and stratified by sex.
+- Data represented in plots.
