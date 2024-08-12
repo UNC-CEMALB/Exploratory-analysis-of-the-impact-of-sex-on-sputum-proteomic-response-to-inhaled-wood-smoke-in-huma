@@ -1,0 +1,121 @@
+
+# Set up workspace
+```{r message = FALSE, warning = FALSE}
+# Set directory for knitr to save the html
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+
+```
+
+# Load packages and datasets.
+```{r message = FALSE, warning = FALSE}
+# Load packages
+library(readxl) # for reading in files
+library(openxlsx) # for writing excel files
+library(tidyverse) # for data organization and manipulation
+library(cowplot) # for plot themes
+
+# Read in files.
+Sum_Stats_FINAL <- read_excel("../output_FINAL/CellDiff_Cytokine_Sum_Stats_v2_08.12.2024.xlsx")
+```
+
+## Scatter Plots of cell differentials andIL-8
+
+Create plots that show geom_point() and geom_line() by sex across each timepoint.
+We are interested in the data with significant post.hoc results: Sputum percent PMNs, %CD301, %iNOS, and IL-8.
+
+Sputum Percent PMN
+```{r}
+# Set a path for saving plots
+plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL"
+
+PMN_1 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "sputum_percent_pmn") %>% 
+  select(Variable, Sex, Pre_Mean, Post_24hr_Mean) %>% 
+  pivot_longer(cols = c(Pre_Mean, Post_24hr_Mean),
+               names_to = "Timepoint_Mean",
+               values_to = "Mean") %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_Mean == "Pre_Mean" ~ "Pre",
+                     Timepoint_Mean == "Post_24hr_Mean" ~ "Post_24hr")) %>% 
+  select(-Timepoint_Mean)
+  
+PMN_2 <- Sum_Stats_FINAL %>% 
+  filter(Variable == "sputum_percent_pmn") %>% 
+  select(Variable, Sex, Pre_SE, Post_24hr_SE) %>% 
+  pivot_longer(cols = c(Pre_SE, Post_24hr_SE),
+               names_to = "Timepoint_SE",
+               values_to = "SE")  %>% 
+  mutate(Timepoint = 
+           case_when(Timepoint_SE == "Pre_SE" ~ "Pre",
+                     Timepoint_SE == "Post_24hr_SE" ~ "Post_24hr")) %>% 
+  select(-Timepoint_SE)
+
+PMN_df <- merge(PMN_1, PMN_2, by = c("Variable", "Sex", "Timepoint"))
+
+###### Generate Plot
+
+new_labels <- c("Pre", "24hr Post") # New labels for the x-axis ticks
+
+PMN_Plot <- ggplot() +
+  
+   geom_point(Data_Log2,
+     mapping = aes(x = factor(timepoint, levels = c("Pre", "Post_24hr")), 
+                   y = sputum_percent_pmn, 
+                   colour = sex), 
+                   size = 1.3,
+                   position = position_jitterdodge(dodge.width = 0.1)) + 
+  
+   geom_line(PMN_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean, 
+                   group = Sex, 
+                   color = Sex),
+                      size = 1) +
+  
+  geom_errorbar(PMN_df, mapping = aes(x = factor(Timepoint, 
+                   levels = c("Pre", "Post_24hr")), 
+                   y = Mean,
+                   colour = Sex,
+                   ymin = Mean - SE, ymax = Mean + SE), 
+                     width = 0.2, 
+                     linewidth = 0.9) +
+  
+  scale_colour_manual(values = c("#ED68ED", "#0089FF")) +
+    xlab("Timepoint") +
+    ylab("% PMN") +
+    ggtitle("Sputum % PMN") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 100)) +
+  
+  scale_x_discrete(labels = new_labels) +
+  
+  guides(color = guide_legend(title = "Sex")) +
+  
+  coord_cartesian(clip = "off") +
+
+  theme_cowplot(12) +
+  
+  theme(
+    plot.title = element_text(hjust = 0.5, vjust = 2, size = 27, face = "bold"),
+    axis.title = element_text(size = 23, face = "bold"),
+    legend.title = element_text(size = 23, face = "bold"),
+    
+    axis.text = element_text(size = 21),
+    axis.text.x = element_text(vjust = -0.3), 
+    axis.title.x = element_text(vjust = -0.6), 
+    legend.text = element_text(size = 21),
+    
+    axis.line = element_line(colour = "black"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+PMN_Plot
+
+ggsave(
+  "Sputum Percent PMN_08.12.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 8,
+  height = 6,
+  dpi = 1200)
+
+```
