@@ -1,0 +1,119 @@
+
+# Set up workspace
+```{r message = FALSE, warning = FALSE}
+# Set directory for knitr to save the html
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+
+```
+
+# Load packages and datasets.
+```{r message = FALSE, warning = FALSE}
+# Load packages
+library(readxl) # for reading in files
+library(openxlsx) # for writing excel files
+library(tidyverse) # for data organization and manipulation
+library(ggrepel) # for ggplot text labels
+library(cowplot) # for plot themes
+library(eulerr) # for venn diagrams
+
+# Read in files.
+Log2_FC <- read_excel("../output_FINAL/FC_Mean_Pval_08.10.2024.xlsx")
+Log2_FC_Sex <- read_excel("../output_FINAL/Log2_FCs by sex with Pvals_08.10.2024.xlsx")
+```
+
+Make separate dfs for labeling proteins in the volcano plots.
+```{r}
+# All subjects
+Log2_FC_Top <- Log2_FC %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(Pval < 0.05) %>% 
+  arrange(desc(abs(Log2_FC)))
+
+All_Top10 <- Log2_FC_Top[1:10,] # Select the top 10 proteins
+unlist(All_Top10$Protein_Name) # "CXCL6" "MARCO" "GFRP"  "NCEH1" "GPDA"  "PPA5"  "TFR1"  "NNRE"  "ACOC"  "TGM2" 
+
+# Male subjects only
+FC_Male_Top <- Log2_FC_Sex[,1:5] # Select just the male cols
+FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(M_Pval < 0.05) %>% 
+  arrange(desc(abs(M_Log2_FC)))
+
+Male_Top10 <- FC_Male_Top[1:10,] # Select the top 10 proteins
+unlist(Male_Top10$Protein_Name) # "AT2A2" "NCEH1" "AL3A2" "MARCO" "GPDA"  "ACOC"  "TFR1"  "PPA5"  "EST1"  "RS24"  
+
+# Female subjects only
+FC_Female_Top <- Log2_FC_Sex[,c(1, 6:9)] # Select just the female cols
+FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(F_Pval < 0.05) %>% 
+  arrange(desc(abs(F_Log2_FC)))
+
+Female_Top10 <- FC_Female_Top[1:10,] # Select the top 10 proteins
+unlist(Female_Top10$Protein_Name) # "K2C80" "PLAK"  "CXCL6" "FILA2" "AIF1"  "K1C14" "SPB12" "GFRP"  "RNAS2" "UTER"  
+
+```
+
+# Volcano plots - fold change
+
+Generate volcano plots that show upregulated and downregulated proteins across all subjects.
+Only log2 FCs with a p<0.05 will be considered significant.
+```{r}
+# Create an object holding the pathway to save the plots into
+plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL"
+
+# Add a column of NAs
+Log2_FC$diffexpressed <- "Not Significant"
+
+# If FC > 0 and pvalue < 0.05, set as "Up" 
+Log2_FC$diffexpressed[Log2_FC$Log2_FC > 0 & Log2_FC$Pval < 0.05] <- "Up"
+
+# If FC < 0 and pvalue < 0.05, set as "Down"
+Log2_FC$diffexpressed[Log2_FC$Log2_FC < 0 & Log2_FC$Pval < 0.05] <- "Down"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+Log2_FC$delabel <- NA
+Log2_FC$delabel[Log2_FC$diffexpressed != "Not Significant"] <- Log2_FC$Protein_Name[Log2_FC$diffexpressed != "Not Significant"]
+
+# Create the plot
+FC_Volcano <- Log2_FC %>% 
+  ggplot(
+    aes(x = Log2_FC, y = -log10(Pval), col = diffexpressed, label = delabel)) +
+        geom_point() + 
+        scale_color_manual(values = c("blue", "red", "gray") , breaks = c("Down", "Up", "Not Significant")) +
+        
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+        geom_text_repel(data = Log2_FC %>% 
+            filter(Protein_Name %in% c("CXCL6", "MARCO", "GFRP",  "NCEH1", "GPDA",  "PPA5",  "TFR1",  "NNRE",  "ACOC",  "TGM2" ))) + 
+
+        xlim(-1.2, 1.2) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 3.5)) +
+  
+        labs(y = "-Log10(P-value)", x = "Log2(Fold Change)") +
+        ggtitle("Pre vs 24hr Post") +
+        
+        theme_cowplot(12) +
+
+        theme(
+          axis.line = element_line(colour = "black"), 
+          
+          axis.text = element_text(size = 15) , 
+          axis.title  = (element_text(size = 17)),
+          axis.title.x = element_text(margin = margin(t = 15)), 
+          axis.title.y = element_text(margin = margin(r = 15)),
+          
+          plot.title = element_text(size = 25, face = "bold", hjust = 0.5),           
+          
+          legend.title = element_blank(),
+          legend.text = element_text(size = 13))           
+ 
+FC_Volcano
+
+ggsave(
+  "FC_Volcano_08.12.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 6.5,
+  height = 5.25,
+  dpi = 1200
+)
+```
