@@ -1,0 +1,126 @@
+
+# Set up workspace
+```{r message = FALSE, warning = FALSE}
+# Set directory for knitr to save the html
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+
+```
+
+# Load packages and datasets.
+```{r message = FALSE, warning = FALSE}
+# Load packages
+library(readxl) # for reading in files
+library(openxlsx) # for writing excel files
+library(tidyverse) # for data organization and manipulation
+library(eulerr) # for venn diagrams
+
+# Read in files.
+Log2_FC_Sex <- read_excel("../output_FINAL/Log2_FCs by sex with Pvals_08.10.2024.xlsx")
+```
+
+Make separate dfs for labeling proteins.
+```{r}
+# Male subjects only
+FC_Male_Top <- Log2_FC_Sex[,1:5] # Select just the male cols
+FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(M_Pval < 0.05) %>% 
+  arrange(desc(abs(M_Log2_FC)))
+
+Male_Top10 <- FC_Male_Top[1:10,] # Select the top 10 proteins
+unlist(Male_Top10$Protein_Name) # "AT2A2" "NCEH1" "AL3A2" "MARCO" "GPDA"  "ACOC"  "TFR1"  "PPA5"  "EST1"  "RS24"  
+
+# Female subjects only
+FC_Female_Top <- Log2_FC_Sex[,c(1, 6:9)] # Select just the female cols
+FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(F_Pval < 0.05) %>% 
+  arrange(desc(abs(F_Log2_FC)))
+
+Female_Top10 <- FC_Female_Top[1:10,] # Select the top 10 proteins
+unlist(Female_Top10$Protein_Name) # "K2C80" "PLAK"  "CXCL6" "FILA2" "AIF1"  "K1C14" "SPB12" "GFRP"  "RNAS2" "UTER"  
+
+```
+
+Make euler plots to show which significantly altered proteins overlapped across males and females.
+```{r}
+# First, we must determine the number of proteins that overlap and are unique to each sex.
+dim(FC_Male_Top) # Males: 111 significant proteins
+M_Down <- FC_Male_Top %>% filter(M_Log2_FC < 0)   # Males: 101 significant down proteins
+M_Up <- FC_Male_Top %>% filter(M_Log2_FC > 0) # Males: 10 significant up proteins
+
+dim(FC_Female_Top) # Females: 68 significant proteins
+F_Down <- FC_Female_Top %>% filter(F_Log2_FC < 0) # Females: 57 significant down proteins
+Fe_Up <- FC_Female_Top %>% filter(F_Log2_FC > 0) # Females: 11 significant up proteins.
+
+Both_Down <- merge(M_Down, F_Down) # 6 down proteins
+Both_Up <- merge(M_Up, Fe_Up) # 0 proteins...up proteins from each sex are unique
+
+# Eulerr plot
+
+###### Down #####
+Down <- euler(c(
+  "A" = 95,
+  "B" = 51, 
+  "A&B" = 6
+))
+
+png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL/M.F_down overlap_08.12.2024.png",
+  width = 800,
+  height = 500,
+  res = 100) # The height of the plot in inches
+
+v <- plot(Down, 
+     labels = list(labels = c("Males", "Females", ""), cex = 1.5),
+     edges = list(lty = 1:3),
+     fills = c("lightblue", "lightpink", "darkseagreen2"),
+     alpha = 0.7,
+     quantities = list(type = "counts", cex = 1.5))
+
+tags <- v$children[[1]]$children[[1]]$children$tags$children
+
+tags <- do.call(grid::gList, lapply(tags, function(x) {
+  x$children[[2]]$label <- sub(" \\(", "\n(", x$children[[2]]$label)
+  x$children[[2]]$just <- NULL
+  x$children[[2]]$hjust <- 0.5
+  x$children[[2]]$vjust <- 1
+  x}))
+
+v$children[[1]]$children[[1]]$children$tags$children <- tags
+
+v
+
+dev.off()
+
+####### Up #######
+Up <- euler(c(
+  "A" = 10,
+  "B" = 11,
+  "A&B" = 0
+))
+
+png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL/M.F_up overlap_08.12.2024.png",
+  width = 800,
+  height = 500,
+  res = 100) # The height of the plot in inches
+
+v <- plot(Up, 
+     labels = list(labels = c("Males", "Females", ""), cex = 1.5),
+     edges = list(lty = 1:3),
+     fills = c("lightblue", "lightpink", "darkseagreen2"),
+     alpha = 0.7,
+     quantities = list(type = "counts", cex = 1.5))
+
+tags <- v$children[[1]]$children[[1]]$children$tags$children
+
+tags <- do.call(grid::gList, lapply(tags, function(x) {
+  x$children[[2]]$label <- sub(" \\(", "\n(", x$children[[2]]$label)
+  x$children[[2]]$just <- NULL
+  x$children[[2]]$hjust <- 0.5
+  x$children[[2]]$vjust <- 1 
+  x}))
+
+v$children[[1]]$children[[1]]$children$tags$children <- tags
+
+v
+
+dev.off()
+```
