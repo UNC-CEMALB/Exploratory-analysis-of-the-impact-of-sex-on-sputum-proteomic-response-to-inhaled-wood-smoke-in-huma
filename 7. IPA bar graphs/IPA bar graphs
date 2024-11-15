@@ -1,8 +1,7 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
-knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2")
 
 ```
 
@@ -14,72 +13,105 @@ library(openxlsx) # for writing excel files
 library(tidyverse) # for data organization and manipulation
 library(ggrepel) # for ggplot text labels
 library(cowplot) # for plot themes
+library(janitor) # for data cleaning
+library(reshape2) # for melt() function
 
 # Read in files.
-canon_down <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/UPDATED Pre vs Post canonical pathways IPA.xls", sheet = "R_data_down")
-canon_up <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/UPDATED Pre vs Post canonical pathways IPA.xls", sheet = "R_data_up")
-cell_funct <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/UPDATED Pre vs Post diseases and functions.xls", sheet = "R_data")
-M.F <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/IPA MvF Pathways.xlsx", sheet = "R_data")
+ipa_all <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/data/IPA pathways all subjects_10.01.2024.xls")
+ipa_fem <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/data/IPA pathways females_10.01.2024.xls")
+ipa_male <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/data/IPA pathways males_10.01.2024.xls")
+
+plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/plots"
+
 ```
 
 # All subjects Pathway Enrichment Figures
 
 ## Bar graphs 
 
-Bar graphs of the top 10 most significant downregulated and upregulated IPA canonical pathways from Pre vs Post comparison across all subjects.
+Clean the data names 
 ```{r}
+ipa_all <- clean_names(ipa_all)
+ipa_fem <- clean_names(ipa_fem)
+ipa_male <- clean_names(ipa_male)
+
 # I will represent this graph using log2 p-values, therefore I will multiply the Neg_Log_P.value by -1.
-canon_down$Log_P.value <- -1 * canon_down$Neg_Log_P.value
+ipa_all$log_pval <- -1 * ipa_all$log_p_value
+ipa_fem$log_pval <- -1 * ipa_fem$log_p_value
+ipa_male$log_pval <- -1 * ipa_male$log_p_value
 
-# Selecting for the top 10 most downregulated pathways.
-Top_Ten_Down <- canon_down %>% 
-  filter(Log_P.value < 0) %>% 
-  slice_head(n = 10)
+colnames(ipa_all)[which(names(ipa_all) == "log_p_value")] <- "neg_log_p_value"
+colnames(ipa_fem)[which(names(ipa_fem) == "log_p_value")] <- "neg_log_p_value"
+colnames(ipa_male)[which(names(ipa_male) == "log_p_value")] <- "neg_log_p_value"
+```
 
+
+```{r}
+# Selecting for biologically relevant pathways.
+all_10 <- ipa_all[c(1, 5, 8, 20, 57, 64, 78, 85, 191),]
+fem_10 <- ipa_fem[c(1, 5, 8, 20, 57, 64, 78, 85, 191),]
+male_10 <- ipa_male[c(1, 5, 8, 20, 57, 64, 78, 85, 191),]
+
+# Add a col identifier before combining dfs
+all_10$group <- 'All'
+fem_10$group <- 'F'
+male_10$group <- 'M'
+ 
+data <- bind_rows(all_10, fem_10)
+data <- bind_rows(data, male_10)
+```
+
+```{r}
 # Adjusting the pathways names to fit on plot.
-Top_Ten_Down$Ingenuity_Canonical_Pathways[Top_Ten_Down$Ingenuity_Canonical_Pathways == "Fcγ Receptor-mediated Phagocytosis in Macrophages and Monocytes"] <- 
-  "Fcγ Receptor-mediated Phagocytosis \nin Macrophages & Monocytes"
+data$ingenuity_canonical_pathways[data$ingenuity_canonical_pathways == "Leukocyte Extravasation Signaling"] <- "Leukocyte Extravasation \nSignaling"
 
-Top_Ten_Down$Ingenuity_Canonical_Pathways[Top_Ten_Down$Ingenuity_Canonical_Pathways == "Cardiac Hypertrophy Signaling (Enhanced)"] <- 
-  "Cardiac Hypertrophy Signaling"
+data$ingenuity_canonical_pathways[data$ingenuity_canonical_pathways == "Production of Nitric Oxide and Reactive Oxygen Species in Macrophages"] <- "Production of \nNO and ROS in Macs"
+
+data$ingenuity_canonical_pathways[data$ingenuity_canonical_pathways == "Fcγ Receptor-mediated Phagocytosis in Macrophages and Monocytes"] <- "Fcγ Receptor-mediated \nPhagocytosis"
 
 # Create plot.
-plot_canon_down <- Top_Ten_Down %>% 
-  ggplot(aes(x = Log_P.value, y = reorder(Ingenuity_Canonical_Pathways, -Log_P.value), fill = Z_Score )) +
-  geom_bar(colour="black", stat = "identity", width = 0.6) +
-
-  scale_fill_gradient(guide = guide_colorbar(frame.colour = "black")) +
-
-  scale_x_continuous(limits = c(-50, 0), expand = c(0, 0)) +
-  scale_y_discrete(position = "right") +
+comp_plot <- data %>% 
+  ggplot(aes(x = reorder(ingenuity_canonical_pathways, -log_pval), y = z_score, fill = group, color = group)) +
+  geom_col(position = position_dodge(0.8), size = 1.1, width = 0.65) +
   
-  labs(title = "Predicted Inhibited \nCanonical Pathways", x = "log(p-value)", fill = "Z-Score") +
+  scale_fill_manual(labels = c("All", "Females", "Males"), values = c("#CBB0FF",  "#F69DFF", "#79D6FF")) +
+  scale_color_manual(values = c("#8960FA", "#D34CE0", "#53AED6"), guide = "none") +
+  
+  guides(fill = guide_legend(reverse=TRUE)) +
+  
+  scale_x_discrete(position = "top") +
+  #scale_x_discrete(position = "right",labels = function(x) str_wrap(x, width = 30)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(-12, 5)) +
+  
+  geom_hline(yintercept = 0) +
+  
+  labs(title = "Canonical Pathways", x = "", y = "Z-Score", fill = "Z-Score") +
+  
   theme_cowplot(12) +
-
+  
   theme(
         axis.line = element_line(colour = "black"), 
         
         plot.title = element_text(hjust = 0.5, face = "bold", size = 27),
-        
         axis.title.y = element_blank(), 
-        axis.text.y = element_text(size = 25),
-        
-        axis.text.x = element_text(colour = "black", size = 25), 
-        axis.title.x = element_text(size = 25), 
+        axis.text.y = element_text(colour = "black", size = 22),
+        axis.title.x = element_text(colour = "black", size = 25, vjust = -0.5), 
+        axis.text.x = element_text(colour = "black", size = 25),
         
         legend.position = "left",
         legend.title = element_text(size = 25),
-        legend.text = element_text(size = 18),
-        legend.key.size = unit(8, 'mm') 
-        ) 
-plot_canon_down  
+        legend.text = element_text(size = 25),
+        legend.key.size = unit(8, 'mm')) +
+  
+  coord_flip() 
+comp_plot
 
 ggsave(
-  "Pre_vs_Post_downreg_canon_06.12.2024.jpg",
+  "IPA pathways compare sex_long_10.22.2024.png",
   plot = last_plot(),
   path = plot.path,
   width = 15,
-  height = 8, 
+  height = 8,
   dpi = 1200)
 
-```
+``` 
