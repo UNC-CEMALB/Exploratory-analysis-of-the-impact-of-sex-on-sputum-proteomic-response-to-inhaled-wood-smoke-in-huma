@@ -1,8 +1,7 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
-knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2")
 
 ```
 
@@ -14,15 +13,15 @@ library(openxlsx) # for writing excel files
 library(tidyverse) # for data organization and manipulation
 
 # Read in files.
-original_proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/011023_Processed_Proteomics_Data.csv")
-demographics <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/Demographics_Data_R.xlsx")
+original_proteomics_df <- read.csv("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/data/011023_Processed_Proteomics_Data.csv")
+demographics <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/data/SubjectInfo_091324.xlsx", sheet = "Demographic_DATA") # new and correct subject numbers
 ```
 
 # Import data and perform initial cleaning steps
 The raw data will be log2 transformed.
 ```{r}
 proteomics_df = original_proteomics_df %>%
-  separate(Subject_ID, c("Responder_Status", "ID"), sep = "_") %>%   
+  separate(Subject_ID, c("Responder_Status", "Subject_Number"), sep = "_") %>%   
   separate(Sample_ID, c("Pre_Post", NA), sep = "_") %>% 
   separate(Protein_Name, c("Protein_Name", NA), sep = "_") %>% 
   rename("Non_Imputed_Intensity" = "Intensity") %>% 
@@ -31,8 +30,12 @@ proteomics_df = original_proteomics_df %>%
 # We will only study log2 transformed data.
 proteomics_df$Log2_Intensity <- log2(proteomics_df$Intensity)
 
+#  Shorten demographics data 
+demo <- demographics[,c(1:10)]
+
 # Merge proteomics data with the demographics data.
-proteomics_df <- merge(proteomics_df, demographics, by = "ID")
+proteomics_df <- merge(proteomics_df, demo, by = "Subject_Number")
+names(proteomics_df)[names(proteomics_df) == 'Subject_Number'] <- 'ID'
 
 head(proteomics_df)
 ```
@@ -40,11 +43,11 @@ head(proteomics_df)
 Make a smaller dataframe to use for future plots.
 ```{r}
 proteomics_short <- proteomics_df %>% 
-  select(c(ID, Protein_Name, Pre_Post, Log2_Intensity, Sex)) %>% 
+  select(c(ID, Protein_Name, Protein_Accession, Pre_Post, Log2_Intensity, Sex)) %>% 
   pivot_wider(names_from = Pre_Post, values_from = Log2_Intensity)
 
 # Save dataframe 
-write.xlsx(proteomics_short,"../output_FINAL/proteomics_short_08.10.2024.xlsx")
+write.xlsx(proteomics_short,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/proteomics_short_09.27.2024.xlsx")
 ```
 
 Separate into two data frames: one for Pre intensity and another for Post intensity. 
@@ -125,7 +128,7 @@ SW.F_Res$Homogeneity <-
     SW.F_Res$F_pval > 0.05 ~ "Yes")
 
 # Save results.
-write.xlsx(SW.F_Res,"../output_FINAL/SW_and_F.Test_Results_08.10.2024.xlsx")
+write.xlsx(SW.F_Res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/SW_and_F.Test_Results_09.30.2024.xlsx")
 ```
 
 ## Assessing normality and homogeneity of variance 
@@ -196,5 +199,5 @@ for (i in 1:length(proteins)) {
 head(Prot_Means)
 
 # Save results.
-write.xlsx(Prot_Means, "../output_FINAL/Prot_Means_08.10.2024.xlsx")
+write.xlsx(Prot_Means, "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Prot_Means_09.27.2024.xlsx")
 ```
