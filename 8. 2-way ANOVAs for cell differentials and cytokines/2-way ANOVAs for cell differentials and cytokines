@@ -1,8 +1,7 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
-knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2")
 
 ```
 
@@ -16,14 +15,13 @@ library(tidyverse) # for data organization and manipulation
 library(janitor) # for df cleaning
 
 # Read in files.
-Data <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/DEMOGRAPHICS_FINAL.xlsx", sheet = "Smokescreen_Data_R")
+Data <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/data/sputum data_10.08.2024.xlsx")
 ```
 
 
 Clean dataframe and subset specific columns.
+Log2 transform all data except percentages.
 ```{r}
-# Read in files.
-Data <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/data/DEMOGRAPHICS_FINAL.xlsx", sheet = "Smokescreen_Data_R")
 
 # Remove all spaces, change all letters to lowercase, change '-' to '_'
 Data <- clean_names(Data)
@@ -65,7 +63,7 @@ Data_Log2[cols] <- Data_Log2[cols] + 8 # Transform by +8 to keep the values all 
 Data_Log2[cols][sapply(Data_Log2[cols], is.infinite)] <- NA 
 
 # Remove Post_6hr time point
-Data_Log2 <- Data_Log2 %>% filter(timepoint == "Pre" | timepoint == "Post_24hr")
+# Data_Log2 <- Data_Log2 %>% filter(timepoint == "Pre" | timepoint == "Post_24hr")
 
 head(Data_Log2)
 ```
@@ -119,19 +117,19 @@ Clean up the final df using pivot_wider() and renaming the cols.
 Sum_Stats_Log2_Wide <- Sum_Stats_Log2 %>% 
  pivot_wider(names_from = timepoint, values_from = c(mean, sd, n, se)) 
 
-oldnames = c("variable", "sex", "mean_Post_24hr",  "mean_Pre", "sd_Post_24hr", 
-             "sd_Pre", "n_Post_24hr",  "n_Pre", "se_Post_24hr",  "se_Pre")
+oldnames = c("variable", "sex", "mean_Post_24hr", "mean_Post_6hr", "mean_Pre", "sd_Post_24hr", "sd_Post_6hr", 
+             "sd_Pre", "n_Post_24hr", "n_Post_6hr", "n_Pre", "se_Post_24hr", "se_Post_6hr", "se_Pre")
 
-newnames = c("Variable", "Sex", "Post_24hr_Mean",  "Pre_Mean", "Post_24hr_SD", 
-             "Pre_SD", "Post_24hr_N",  "Pre_N", "Post_24hr_SE",  "Pre_SE")
+newnames = c("Variable", "Sex", "Post_24hr_Mean", "Post_6hr_Mean", "Pre_Mean", "Post_24hr_SD", "Post_6hr_SD",
+             "Pre_SD", "Post_24hr_N", "Post_6hr_N", "Pre_N", "Post_24hr_SE", "Post_6hr_SE", "Pre_SE")
 
 Sum_Stats_Log2_Wide <- Sum_Stats_Log2_Wide %>% rename_at(vars(oldnames), ~ newnames)
 
 # Here is the final df
 Sum_Stats_FINAL <- Sum_Stats_Log2_Wide %>% 
-  select(Variable, Sex, Pre_Mean, Pre_SD, Pre_N, Pre_SE,
+  select(Variable, Sex, Pre_Mean, Pre_SD, Pre_N, Pre_SE, Post_6hr_Mean, Post_6hr_SD, Post_6hr_N, Post_6hr_SE,
          Post_24hr_Mean, Post_24hr_SD, Post_24hr_N, Post_24hr_SE)
 
 # Save dataframe 
-write.xlsx(Sum_Stats_FINAL,"../output_FINAL/CellDiff_Cytokine_Sum_Stats_v2_08.12.2024.xlsx")
+write.xlsx(Sum_Stats_FINAL,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/CellDiff_Cytokine_Sum_Stats_10.08.2024.xlsx")
 ```
