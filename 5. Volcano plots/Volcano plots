@@ -1,8 +1,7 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
-knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2")
 
 ```
 
@@ -17,8 +16,8 @@ library(cowplot) # for plot themes
 library(eulerr) # for venn diagrams
 
 # Read in files.
-Log2_FC <- read_excel("../output_FINAL/FC_Mean_Pval_08.10.2024.xlsx")
-Log2_FC_Sex <- read_excel("../output_FINAL/Log2_FCs by sex with Pvals_08.10.2024.xlsx")
+Log2_FC <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FC all_Pval_09.27.2024.xlsx")
+Log2_FC_Sex <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FCs by sex with Pvals_09.27.2024.xlsx")
 ```
 
 Make separate dfs for labeling proteins in the volcano plots.
@@ -38,7 +37,7 @@ FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order b
   arrange(desc(abs(M_Log2_FC)))
 
 Male_Top10 <- FC_Male_Top[1:10,] # Select the top 10 proteins
-unlist(Male_Top10$Protein_Name) # "AT2A2" "NCEH1" "AL3A2" "MARCO" "GPDA"  "ACOC"  "TFR1"  "PPA5"  "EST1"  "RS24"  
+unlist(Male_Top10$Protein_Name) # "MUC2"  "PRG2"  "PRP1"  "NNRE"  "CEAM5" "CATG"  "LV151" "LV743" "DOPD"  "KV127"  
 
 # Female subjects only
 FC_Female_Top <- Log2_FC_Sex[,c(1, 6:9)] # Select just the female cols
@@ -47,7 +46,7 @@ FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and ord
   arrange(desc(abs(F_Log2_FC)))
 
 Female_Top10 <- FC_Female_Top[1:10,] # Select the top 10 proteins
-unlist(Female_Top10$Protein_Name) # "K2C80" "PLAK"  "CXCL6" "FILA2" "AIF1"  "K1C14" "SPB12" "GFRP"  "RNAS2" "UTER"  
+unlist(Female_Top10$Protein_Name) # "MARCO" "GFRP"  "PPA5"  "TFR1"  "GPDA"  "TGM2"  "LEG1"  "NCEH1" "ACOC"  "F16P1"  
 
 ```
 
@@ -57,7 +56,7 @@ Generate volcano plots that show upregulated and downregulated proteins across a
 Only log2 FCs with a p<0.05 will be considered significant.
 ```{r}
 # Create an object holding the pathway to save the plots into
-plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL"
+plot.path <- "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/plots"
 
 # Add a column of NAs
 Log2_FC$diffexpressed <- "Not Significant"
@@ -109,7 +108,133 @@ FC_Volcano <- Log2_FC %>%
 FC_Volcano
 
 ggsave(
-  "FC_Volcano_08.12.2024.png",
+  "FC_Volcano_09.27.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 6.5,
+  height = 5.25,
+  dpi = 1200
+)
+```
+
+
+Generate volcano plots that show upregulated and dowregulated proteins stratified by Males and Females.
+Only FCs with a p<0.05 will be considered significant.
+```{r}
+# Select for male subjects.
+M_FC <- Log2_FC_Sex %>% 
+   select(c(Protein_Name, M_Log2_FC, M_Pval))
+
+# Add a column of NAs
+M_FC$diffexpressed <- "Not Significant"
+
+# If FC > 0 and pvalue < 0.05, set as "Up" 
+M_FC$diffexpressed[M_FC$M_Log2_FC > 0 & M_FC$M_Pval < 0.05] <- "Up"
+
+# If FC < -0.6 and pvalue < 0.05, set as "Down"
+M_FC$diffexpressed[M_FC$M_Log2_FC < 0 & M_FC$M_Pval < 0.05] <- "Down"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+M_FC$delabel <- NA
+M_FC$delabel[M_FC$diffexpressed != "Not Significant"] <- M_FC$Protein_Name[M_FC$diffexpressed != "Not Significant"]
+
+# Create the plot
+M_Volcano <- M_FC %>% 
+  ggplot(
+    aes(x = M_Log2_FC, y = -log10(M_Pval), col = diffexpressed, label = delabel)) +
+        geom_point() +
+        scale_color_manual(values = c("blue", "red", "gray") , breaks = c("Down", "Up", "Not Significant")) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+       
+        geom_text_repel(data = M_FC %>% 
+          filter(Protein_Name %in% c("MUC2",  "PRG2",  "PRP1",  "NNRE",  "CEAM5", "CATG",  "LV151", "LV743", "DOPD", "KV127"))) + 
+  
+        xlim(-2, 2) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 3.4)) +
+
+        labs(y = "-Log10(P-value)", x = "Log2(Fold Change)") +
+        ggtitle("Males") +
+  
+        theme_cowplot(12) +
+
+        theme(
+          axis.line = element_line(colour = "black"), 
+          
+          axis.text = element_text(size = 15) , axis.title  = (element_text(size = 17)),
+          axis.title.x = element_text(margin = margin(t = 15)), 
+          axis.title.y = element_text(margin = margin(r = 15)),
+          
+          plot.title = element_text(size = 25, face = "bold", hjust = 0.5),  
+          
+          legend.text = element_text(size = 13),            
+          legend.title = element_blank()) 
+M_Volcano
+
+ggsave(
+  "M_FC_Volcano_09.27.2024.png",
+  plot = last_plot(),
+  path = plot.path,
+  width = 6.5,
+  height = 5.25,
+  dpi = 1200
+)
+```
+
+
+```{r}
+# Select for females subjects
+F_FC <- Log2_FC_Sex %>% 
+   select(c(Protein_Name, F_Log2_FC, F_Pval))
+
+# add a column of NAs
+F_FC$diffexpressed <- "Not Significant"
+
+# If FC > 0 and pvalue < 0.05, set as "Up" 
+F_FC$diffexpressed[F_FC$F_Log2_FC > 0 & F_FC$F_Pval < 0.05] <- "Up"
+
+# If log2Foldchange < 0 and pvalue < 0.05, set as "Down"
+F_FC$diffexpressed[F_FC$F_Log2_FC < 0 & F_FC$F_Pval < 0.05] <- "Down"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+F_FC$delabel <- NA
+F_FC$delabel[F_FC$diffexpressed != "Not Significant"] <- F_FC$Protein_Name[F_FC$diffexpressed != "Not Significant"]
+
+# Create the plot.
+F_Volcano <- F_FC %>% 
+  ggplot(
+    aes(x = F_Log2_FC, y = -log10(F_Pval), col = diffexpressed, label = delabel)) +
+        geom_point() + 
+        scale_color_manual(values = c("blue", "red", "gray") , breaks = c("Down", "Up", "Not Significant")) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+
+        geom_text_repel(data = F_FC %>% 
+          filter(Protein_Name %in% c("MARCO", "GFRP",  "PPA5",  "TFR1",  "GPDA",  "TGM2",  "LEG1",  "NCEH1", "ACOC",  "F16P1" ))) + 
+  
+        xlim(-2, 2) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 3.4)) +
+  
+        labs(y = "-Log10(P-value)", x = "Log2(Fold Change)") +
+        ggtitle("Females") +
+        
+        theme_cowplot(12) +
+          
+        theme(
+          axis.line = element_line(colour = "black"), 
+          
+          axis.text = element_text(size = 15) , axis.title  = (element_text(size = 17)),
+          axis.title.x = element_text(margin = margin(t = 15)), 
+          axis.title.y = element_text(margin = margin(r = 15)),
+          
+          plot.title = element_text(size = 25, face = "bold", hjust = 0.5),     
+          
+          legend.text = element_text(size = 13),            
+          legend.title = element_blank()) 
+F_Volcano
+
+ggsave(
+  "F_FC_Volcano_09.27.2024.png",
   plot = last_plot(),
   path = plot.path,
   width = 6.5,
