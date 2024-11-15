@@ -1,8 +1,7 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
-knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2")
 
 ```
 
@@ -15,7 +14,7 @@ library(tidyverse) # for data organization and manipulation
 library(purrr) # for summary stats
 
 # Read in files.
-proteomics_short <- read_excel("../output_FINAL/proteomics_short_08.10.2024.xlsx")
+proteomics_short <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/proteomics_short_09.27.2024.xlsx")
 ```
 
 This loop will also generate T-tests across each protein for Pre and Post across subjects stratified by sex.
@@ -64,8 +63,11 @@ for (i in 1:length(proteins)) {
   # This list will be used to add the appropriate protein name to ttest_pre.post.
   Protein_Name <- proteins[i] 
   
+  # Protein Accession 
+  Protein_Accession <- unique(M_filtered$Protein_Accession)
+  
   # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
-  res <- data.frame(Protein_Name, M_Pre_Mean, M_Pre_SD, M_Post_Mean, M_Post_SD, M_Pval, F_Pre_Mean, F_Pre_SD, F_Post_Mean, F_Post_SD, F_Pval)
+  res <- data.frame(Protein_Name, Protein_Accession, M_Pre_Mean, M_Pre_SD, M_Post_Mean, M_Post_SD, M_Pval, F_Pre_Mean, F_Pre_SD, F_Post_Mean, F_Post_SD, F_Pval)
   
   ttest_mean_res <- rbind(res, ttest_mean_res)
   
@@ -75,7 +77,7 @@ ttest_mean_res$M_p.adj <-  p.adjust(ttest_mean_res$M_Pval, "fdr")
 ttest_mean_res$F_p.adj <-  p.adjust(ttest_mean_res$F_Pval, "fdr")
 
 # Save results.
-write.xlsx(ttest_mean_res,"../output_FINAL/T.Tests_Means_Pre.Post_by sex_08.10.2024.xlsx")
+write.xlsx(ttest_mean_res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/T.Tests_Means_Pre.Post_by sex_09.27.2024.xlsx")
 ```
 
 ## Fold changes
@@ -83,7 +85,7 @@ write.xlsx(ttest_mean_res,"../output_FINAL/T.Tests_Means_Pre.Post_by sex_08.10.2
 Now we will generate the FC means across different categories.
 ```{r}
 # Load Log2 FC dataframe
-Log2_FC.df <- read_excel("../output_FINAL/Log2_FC_08.10.2024.xlsx")
+Log2_FC.df <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FC_09.27.2024.xlsx")
 
 # This df will hold the FC means and SDs across all proteins by sex stratification
 Log2_FC_bySex <- Log2_FC.df %>% 
@@ -104,18 +106,18 @@ Now we will attach the FC means to the the p-values generated from the T-Test lo
 ```{r}
 # Isolate P-values corresponding to males and females
 Pval_Sex <- ttest_mean_res %>% 
-  select(c(Protein_Name, F_Pval, F_p.adj, M_Pval, M_p.adj))
+  select(c(Protein_Name, Protein_Accession, F_Pval, F_p.adj, M_Pval, M_p.adj))
 
 # Merge the FC means and p-values.
 Log2_FC_Sex <- merge(Log2_FC_bySex, Pval_Sex, by = "Protein_Name")
 
 # Reorder the columns in Log2_FC_Sex
 Log2_FC_Sex <- Log2_FC_Sex %>% 
-  select(Protein_Name, M_Log2_FC, M_SD, M_Pval, M_p.adj, F_Log2_FC, F_SD, F_Pval, F_p.adj)
+  select(Protein_Name, Protein_Accession, M_Log2_FC, M_SD, M_Pval, M_p.adj, F_Log2_FC, F_SD, F_Pval, F_p.adj)
 
 # View dfs  
 head(Log2_FC_Sex)
 
 # Save results.
-write.xlsx(Log2_FC_Sex,"../output_FINAL/Log2_FCs by sex with Pvals_08.10.2024.xlsx")
+write.xlsx(Log2_FC_Sex,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FCs by sex with Pvals_09.27.2024.xlsx")
 ```
