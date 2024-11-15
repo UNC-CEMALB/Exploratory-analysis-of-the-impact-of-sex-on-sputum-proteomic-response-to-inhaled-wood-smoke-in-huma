@@ -1,4 +1,3 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
@@ -15,97 +14,79 @@ library(tidyverse) # for data organization and manipulation
 library(eulerr) # for venn diagrams
 
 # Read in files.
-Log2_FC_Sex <- read_excel("../output_FINAL/Log2_FCs by sex with Pvals_08.10.2024.xlsx")
+Log2_FC <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FC all_Pval_09.27.2024.xlsx")
+Log2_FC_Sex <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FCs by sex with Pvals_09.27.2024.xlsx")
 ```
 
-Make separate dfs for labeling proteins.
+Make separate dfs for significantly changed proteins
 ```{r}
-# Male subjects only
-FC_Male_Top <- Log2_FC_Sex[,1:5] # Select just the male cols
-FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
-  filter(M_Pval < 0.05) %>% 
-  arrange(desc(abs(M_Log2_FC)))
+# All subjects
+Log2_FC_Top <- Log2_FC %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(Pval < 0.05) 
 
-Male_Top10 <- FC_Male_Top[1:10,] # Select the top 10 proteins
-unlist(Male_Top10$Protein_Name) # "AT2A2" "NCEH1" "AL3A2" "MARCO" "GPDA"  "ACOC"  "TFR1"  "PPA5"  "EST1"  "RS24"  
+# Male subjects only
+FC_Male_Top <- Log2_FC_Sex[,1:6] # Select just the male cols
+FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(M_Pval < 0.05) 
 
 # Female subjects only
-FC_Female_Top <- Log2_FC_Sex[,c(1, 6:9)] # Select just the female cols
+FC_Female_Top <- Log2_FC_Sex[,c(1,2, 7:10)] # Select just the female cols
 FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
-  filter(F_Pval < 0.05) %>% 
-  arrange(desc(abs(F_Log2_FC)))
-
-Female_Top10 <- FC_Female_Top[1:10,] # Select the top 10 proteins
-unlist(Female_Top10$Protein_Name) # "K2C80" "PLAK"  "CXCL6" "FILA2" "AIF1"  "K1C14" "SPB12" "GFRP"  "RNAS2" "UTER"  
+  filter(F_Pval < 0.05)
 
 ```
 
-Make euler plots to show which significantly altered proteins overlapped across males and females.
+Comparison between the number of significantly altered proteins that overlapped between 'females', 'all', and "males" categories
 ```{r}
-# First, we must determine the number of proteins that overlap and are unique to each sex.
-dim(FC_Male_Top) # Males: 111 significant proteins
-M_Down <- FC_Male_Top %>% filter(M_Log2_FC < 0)   # Males: 101 significant down proteins
-M_Up <- FC_Male_Top %>% filter(M_Log2_FC > 0) # Males: 10 significant up proteins
+# First, we must determine the number of proteins that overlap and are unique to each Females, Males and all.
 
-dim(FC_Female_Top) # Females: 68 significant proteins
-F_Down <- FC_Female_Top %>% filter(F_Log2_FC < 0) # Females: 57 significant down proteins
-Fe_Up <- FC_Female_Top %>% filter(F_Log2_FC > 0) # Females: 11 significant up proteins.
+##### F VS ALL
+dim(FC_Female_Top) # Females: 368 significant proteins
+F_Down <- FC_Female_Top %>% filter(F_Log2_FC < 0) # Females: 368 significant down proteins
+Fe_Up <- FC_Female_Top %>% filter(F_Log2_FC > 0) # Females: 0 significant up proteins.
 
-Both_Down <- merge(M_Down, F_Down) # 6 down proteins
-Both_Up <- merge(M_Up, Fe_Up) # 0 proteins...up proteins from each sex are unique
+All_Down <- Log2_FC_Top %>% filter(Log2_FC < 0) # All: 257 significant down proteins
+All_Up <- Log2_FC_Top %>% filter(Log2_FC > 0) # All: 1 significant up proteins.
 
-# Eulerr plot
+Both_Down.f <- merge(All_Down, F_Down) # 192 down proteins
+Both_Up.f <- merge(All_Up, Fe_Up) # 0 proteins...up proteins from each sex are unique
 
-###### Down #####
-Down <- euler(c(
-  "A" = 95,
-  "B" = 51, 
-  "A&B" = 6
+##### M vs ALL
+M_Down <- FC_Male_Top %>% filter(M_Log2_FC < 0) # Males: 11 significant down proteins
+M_Up <- FC_Male_Top %>% filter(M_Log2_FC > 0) # Males: 16 significant up proteins.
+
+Both_Down.m <- merge(All_Down, M_Down) # 4 down proteins
+Both_Up.m <- merge(All_Up, M_Up) # 0 proteins...up proteins from each sex are unique
+
+###### F VS M
+Both_Down.f.m <- merge(M_Down, F_Down) # 0 down proteins overlap
+Both_Up.f.m <- merge(M_Up, Fe_Up) # 0 up proteins overlap
+
+```
+
+
+# Generate euler plot based on significant protein overlaps
+```{r}
+# Euler plot
+
+All_Sig <- euler(c(
+  "A" = 62, # all (258 all - 192 F overlap - 4 M overlap)
+  "B" = 176, # Fem (368F - 192 all overlap)
+  "C" = 23, # male (27M - 4 all overlap)
+  "A&B" = 192, # all & fem overlap
+  "B&C" = 0, # fem & male overlap
+  "C&A" = 4 # male & all overlap
 ))
 
-png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL/M.F_down overlap_08.12.2024.png",
+png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/plots/All.F.M_overlap_10.22.2024.png",
   width = 800,
   height = 500,
   res = 100) # The height of the plot in inches
 
-v <- plot(Down, 
-     labels = list(labels = c("Males", "Females", ""), cex = 1.5),
+v <- plot(All_Sig, 
+     labels = list(labels = c("All", "Females", "Males", "", ""), cex = 1.5),
      edges = list(lty = 1:3),
-     fills = c("lightblue", "lightpink", "darkseagreen2"),
-     alpha = 0.7,
-     quantities = list(type = "counts", cex = 1.5))
-
-tags <- v$children[[1]]$children[[1]]$children$tags$children
-
-tags <- do.call(grid::gList, lapply(tags, function(x) {
-  x$children[[2]]$label <- sub(" \\(", "\n(", x$children[[2]]$label)
-  x$children[[2]]$just <- NULL
-  x$children[[2]]$hjust <- 0.5
-  x$children[[2]]$vjust <- 1
-  x}))
-
-v$children[[1]]$children[[1]]$children$tags$children <- tags
-
-v
-
-dev.off()
-
-####### Up #######
-Up <- euler(c(
-  "A" = 10,
-  "B" = 11,
-  "A&B" = 0
-))
-
-png(file = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project/output_FINAL/Plots_FINAL/M.F_up overlap_08.12.2024.png",
-  width = 800,
-  height = 500,
-  res = 100) # The height of the plot in inches
-
-v <- plot(Up, 
-     labels = list(labels = c("Males", "Females", ""), cex = 1.5),
-     edges = list(lty = 1:3),
-     fills = c("lightblue", "lightpink", "darkseagreen2"),
+     fills = c("#CEA7FF", "lightpink","lightblue", "darkseagreen2", "#ECF266"),
      alpha = 0.7,
      quantities = list(type = "counts", cex = 1.5))
 
@@ -123,4 +104,137 @@ v$children[[1]]$children[[1]]$children$tags$children <- tags
 v
 
 dev.off()
+```
+
+Generate dfs for supplemental tables. I will make a table of significantly altered proteins for all, females, and males and I will label overlapping proteins
+
+```{r}
+# protein lists for loop
+all_prot <- unique(Log2_FC_Top$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+overlap <- data.frame()
+
+for (i in 1:length(all_prot)) {
+  
+  # Isolating proteins names to include in the final df.
+  Protein_Name <- all_prot[i] 
+  
+         if(sum(FC_Female_Top$Protein_Name == all_prot[i]) == 1){
+           
+              fem1 <- data.frame(Protein_Name)
+              fem1$overlap <- "females"
+              overlap <- rbind(overlap, fem1)
+                
+              } 
+
+         if(sum(FC_Male_Top$Protein_Name == all_prot[i]) == 1 ){
+           
+              male1 <- data.frame(Protein_Name)
+              male1$overlap <- "males"
+              overlap <- rbind(overlap, male1)
+         } 
+  
+  if(sum(FC_Female_Top$Protein_Name == all_prot[i]) == 0 & 
+     sum(FC_Male_Top$Protein_Name == all_prot[i]) == 0){
+           
+              empty <- data.frame(Protein_Name)
+              empty$overlap <- "none"
+              overlap <- rbind(overlap, empty)
+                
+              } 
+
+}
+
+All <- merge(Log2_FC_Top, overlap, by = "Protein_Name")
+
+write.xlsx(All,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/euler_all proteins with overlaps_10.24.2024.xlsx")
+
+```
+
+```{r}
+# protein lists for loop
+f_prot <- unique(FC_Female_Top$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+overlap <- data.frame()
+
+for (i in 1:length(f_prot)) {
+  
+  # Isolating proteins names to include in the final df.
+  Protein_Name <- f_prot[i] 
+  
+         if(sum(Log2_FC_Top$Protein_Name == f_prot[i]) == 1){
+           
+              all1 <- data.frame(Protein_Name)
+              all1$overlap <- "all"
+              overlap <- rbind(overlap, all1)
+                
+              } 
+
+         if(sum(FC_Male_Top$Protein_Name == f_prot[i]) == 1 ){
+           
+              male1 <- data.frame(Protein_Name)
+              male1$overlap <- "males"
+              overlap <- rbind(overlap, male1)
+         } 
+  
+  if(sum(Log2_FC_Top$Protein_Name == f_prot[i]) == 0 & 
+     sum(FC_Male_Top$Protein_Name == f_prot[i]) == 0){
+           
+              empty <- data.frame(Protein_Name)
+              empty$overlap <- "none"
+              overlap <- rbind(overlap, empty)
+                
+              } 
+
+}
+
+Fem <- merge(FC_Female_Top, overlap, by = "Protein_Name")
+
+write.xlsx(Fem,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/euler_female proteins with overlaps_10.24.2024.xlsx")
+
+```
+
+```{r}
+# protein lists for loop
+m_prot <- unique(FC_Male_Top$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+overlap <- data.frame()
+
+for (i in 1:length(m_prot)) {
+  
+  # Isolating proteins names to include in the final df.
+  Protein_Name <- m_prot[i] 
+  
+         if(sum(Log2_FC_Top$Protein_Name == m_prot[i]) == 1){
+           
+              all1 <- data.frame(Protein_Name)
+              all1$overlap <- "all"
+              overlap <- rbind(overlap, all1)
+                
+              } 
+
+         if(sum(FC_Female_Top$Protein_Name == m_prot[i]) == 1 ){
+           
+              fem1 <- data.frame(Protein_Name)
+              fem1$overlap <- "females"
+              overlap <- rbind(overlap, fem1)
+         } 
+  
+  if(sum(Log2_FC_Top$Protein_Name == m_prot[i]) == 0 & 
+     sum(FC_Female_Top$Protein_Name == m_prot[i]) == 0){
+           
+              empty <- data.frame(Protein_Name)
+              empty$overlap <- "none"
+              overlap <- rbind(overlap, empty)
+                
+              } 
+
+}
+
+Male <- merge(FC_Male_Top, overlap, by = "Protein_Name")
+
+write.xlsx(Male,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/euler_male proteins with overlaps_10.24.2024.xlsx")
 ```
