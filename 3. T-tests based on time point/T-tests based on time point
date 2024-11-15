@@ -1,8 +1,7 @@
-
 # Set up workspace
 ```{r message = FALSE, warning = FALSE}
 # Set directory for knitr to save the html
-knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Proteomics Project")
+knitr::opts_knit$set(root.dir = "C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2")
 
 ```
 
@@ -15,7 +14,7 @@ library(tidyverse) # for data organization and manipulation
 library(purrr) # for summary stats
 
 # Read in files.
-proteomics_short <- read_excel("../output_FINAL/proteomics_short_08.10.2024.xlsx")
+proteomics_short <- read_excel("C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/proteomics_short_09.27.2024.xlsx")
 ```
 
 # T-Tests and Fold Change Calculations
@@ -45,15 +44,17 @@ for (i in 1:length(proteins)) {
   # Runs T-tests on Pre vs Post.
   ttest <- t.test(All_filtered$Pre, All_filtered$Post, paired = TRUE)
 
-
   # Isolate p-value from ttest_res to place in ttest_pre.post later in the chunk.
   Pval <- ttest$p.value
 
   # This list will be used to add the appropriate protein name to ttest_pre.post.
   Protein_Name <- proteins[i] 
   
+  # Protein Accession 
+  Protein_Accession <- unique(All_filtered$Protein_Accession)
+  
   # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
-  res <- data.frame(Protein_Name, Pre_Mean, Pre_SD, Post_Mean, Post_SD, Pval)
+  res <- data.frame(Protein_Name, Protein_Accession, Pre_Mean, Pre_SD, Post_Mean, Post_SD, Pval)
 
   ttest_mean_res <- rbind(res, ttest_mean_res)
   
@@ -62,7 +63,7 @@ for (i in 1:length(proteins)) {
 ttest_mean_res$p.adj <-  p.adjust(ttest_mean_res$Pval, "fdr")
 
 # Save results.
-write.xlsx(ttest_mean_res,"../output_FINAL/T.Tests_Means_Pre.Post_08.10.2024.xlsx")
+write.xlsx(ttest_mean_res,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/T.Tests_Means_Pre.Post_09.27.2024.xlsx")
 ```
 
 ## Fold changes
@@ -102,7 +103,7 @@ for (i in 1:length(proteins)) {
 }  
 
 # Save results.
-write.xlsx(Log2_FC.df,"../output_FINAL/Log2_FC_08.10.2024.xlsx")
+write.xlsx(Log2_FC.df,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FC_09.27.2024.xlsx")
 ```
 
 Generate summary statistics.
@@ -116,4 +117,24 @@ Log2_FC_Mean <- Log2_FC.df %>%
   select(c(Protein_Name, Log2_FC_mean, SD))  
   
 colnames(Log2_FC_Mean)[colnames(Log2_FC_Mean) == "Log2_FC_mean"] <- "Log2_FC"
+```
+
+Now we will attach the Lgo2 FC means to the the p-values generated from the T-Test loop.
+```{r}
+# Isolate P-values 
+Pval <- ttest_mean_res %>% 
+  select(c(Protein_Name, Protein_Accession, Pval, p.adj))
+
+# Merge the log2 FC means and p-values.
+Log2_FC_Mean <- merge(Log2_FC_Mean, Pval, by = "Protein_Name")
+
+# Reorder the columns in Log2_FC_Sex
+Log2_FC_Mean <- Log2_FC_Mean %>% 
+  select(Protein_Name, Protein_Accession, Log2_FC, SD, Pval, p.adj)
+
+# View dfs  
+head(Log2_FC_Mean)
+
+# Save results.
+write.xlsx(Log2_FC_Mean,"C:/Users/mnale/OneDrive - University of North Carolina at Chapel Hill/WSP Prot Analysis 2/output/Log2_FC all_Pval_09.27.2024.xlsx")
 ```
