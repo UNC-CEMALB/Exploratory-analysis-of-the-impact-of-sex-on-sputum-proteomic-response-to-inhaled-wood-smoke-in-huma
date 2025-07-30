@@ -6,7 +6,8 @@ This repository contains script associated with the manuscript "Exploratory anal
 
 The analysis is subdivided into five scripts:
 
-- A_Proteomics_DataProcessing.Rmd: proteomics data normalization, filtering, outlier detection, distribution testing, and log2 transformation
+- A_Proteomics_DataProcessing.Rmd:
+-   Proteomics data normalization, filtering, outlier detection, distribution testing, and log2 transformation
 
 - B_DemographicsAndSputum_DataProcessing.Rmd: data cleaning for demographic data, cell differentials, and cytokines
 
