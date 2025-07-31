@@ -1,0 +1,246 @@
+---
+title: "Data Processing, Formatting, and Distribution Testing"
+output: html_document
+date: "2025-07-01"
+---
+
+# Load packages
+
+```{r message = FALSE, warning = FALSE}
+# Clears global environment
+rm(list = ls(all.names = TRUE)) 
+
+# If needed, install and load packages
+library(this.path) # For file path
+library(openxlsx) # For data import
+library(tidyverse) # For data organization
+library(reshape2) # For data organization
+library(factoextra) # For outlier detection
+library(rstatix) # For stats testing
+
+# Redefine function that is masked
+select <- dplyr::select
+
+# Set working directory
+setwd(this.dir())
+```
+
+# Import, format, and filter data
+
+Note that here, three participants whose samples had blood contamination or low protein expression have already been removed from the data. 
+
+```{r}
+proteomics_df <- read.xlsx("1_InputData/RawData_Proteomics_07.09.2025.xlsx") 
+```
+
+
+# Normalization
+
+Here, we will perform normalization via median normalization, which involves:
+
+1. Summing the abundance values for each sample.
+2. Calculating the median vale across all of the summed abundance values. 
+3. Calculating the ratio.
+
+```{r}
+# Normalize data
+proteomics_df_normalized <- proteomics_df %>%
+  # Grouping by sample
+  pivot_longer(-c(Protein_Accession:Number_Unique_Peptides), names_to = "Subject_ID.Timepoint", values_to = "Intensity") %>%
+  group_by(Subject_ID.Timepoint) %>%
+  # Sum the intensities for each sample
+  mutate(Summed_Value = sum(Intensity)) %>%
+  # Calculate the median across all samples
+  ungroup() %>%
+  mutate(Median_of_Sum = median(Summed_Value),
+         Norm_Factor = Summed_Value/Median_of_Sum,
+         Norm_Intensity = Intensity/Norm_Factor) %>%
+  # Remove unneeded columns and reformat
+  select(-c("Summed_Value", "Median_of_Sum", "Norm_Factor", "Intensity")) %>%
+  pivot_wider(id_cols = c(Protein_Accession:Number_Unique_Peptides), names_from = "Subject_ID.Timepoint", values_from = "Norm_Intensity")
+```
+
+# Detection and protein identity filtering
+
+Remove proteins with fewer than 3 peptides and features that were mapped to multiple accessions:
+```{r}
+proteomics_df_normalized_filtered <- proteomics_df_normalized %>%
+  filter(Number_Unique_Peptides > 2) %>%
+  filter(!str_detect(Protein_Accession, ";"))
+```
+
+# Outlier detection with PCA
+
+```{r}
+# Prepare dataframe
+pca_prep_df <- proteomics_df_normalized_filtered %>%
+  select(-c(Gene_Name:Number_Unique_Peptides)) %>%
+  column_to_rownames("Protein_Accession") %>%
+  t() %>% data.frame()
+
+# PCA requires that the data be centered and scaled, but the data was already scaled with the peptide normalization step
+pca <- prcomp(pca_prep_df, center = TRUE) 
+
+# Visualize results
+pca_plot <- fviz_pca_ind(pca, 
+             label = "none",
+             pointsize = 3) +
+  labs(title = "Principal Component Analysis: All Samples") +
+  theme(axis.title = element_text(size = rel(1.1)),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 0.3),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_blank(), 
+      plot.title = element_text(hjust = 0.5, size = rel(1.5), face = "bold"),
+      legend.position = "none")
+
+pca_plot
+```
+
+It looks like there are potentially samples that could be outliers, but we can check this quantitatively using the criteria of being more than 6 standard deviations from the mean [ref](https://privefl.github.io/blog/detecting-outlier-samples-in-pca/).
+
+```{r}
+# Write function for scoring
+## Input: PCA results dataframe
+## Output: outlier names
+outlier_detection <- function(pca_df){
+
+    # getting scores
+    scores = pca_df$x
+    # identifying samples that are > 6 standard deviations away from the mean
+    outlier_indices = apply(scores, 2, function(x) which( abs(x - mean(x)) > (6 * sd(x)) )) %>%
+        Reduce(union, .)
+    # getting sample names
+    outliers = rownames(scores)[outlier_indices]
+    
+    return(outliers)
+}
+
+# Call function
+outlier_detection(pca)
+```
+
+There were no outliers based on the quantitative cut off, so no samples or subjects will be removed.
+
+# Normality testing and transformation
+
+Prepare data:
+```{r}
+pre <- proteomics_df_normalized_filtered %>% 
+  select(-c(Gene_Name:Number_Unique_Peptides)) %>%
+  pivot_longer(!Protein_Accession, names_to = "Sample_ID", values_to = "value") %>%
+  mutate(Subject_ID = str_replace(Sample_ID, "_[^_]*$", "")) %>%
+  mutate(Timepoint = str_extract(Sample_ID, "[^_]+$")) %>%
+  filter(Timepoint == "Pre")
+
+post <- proteomics_df_normalized_filtered %>% 
+  select(-c(Gene_Name:Number_Unique_Peptides)) %>%
+  pivot_longer(!Protein_Accession, names_to = "Sample_ID", values_to = "value") %>%
+  mutate(Subject_ID = str_replace(Sample_ID, "_[^_]*$", "")) %>%
+  mutate(Timepoint = str_extract(Sample_ID, "[^_]+$")) %>%
+  filter(Timepoint == "Post")
+```
+
+
+## Raw data
+
+Shapiro-Wilk test (distribution):
+```{r}
+shapiro_res_pre <- pre %>%
+  group_by(Protein_Accession) %>%
+  shapiro_test(value) %>%
+  mutate(normal = ifelse(p < 0.05, F, T))
+
+dplyr::count(shapiro_res_pre, normal)
+```
+
+
+```{r}
+shapiro_res_post <- post %>%
+  group_by(Protein_Accession) %>%
+  shapiro_test(value) %>%
+  mutate(normal = ifelse(p < 0.05, F, T))
+
+dplyr::count(shapiro_res_post, normal)
+```
+
+Levene test (homogeneity of variances):
+```{r}
+proteomics_df_normalized_filtered_long <- proteomics_df_normalized_filtered %>% 
+  select(-c(Gene_Name:Number_Unique_Peptides)) %>%
+  pivot_longer(!Protein_Accession, names_to = "Sample_ID", values_to = "value") %>%
+  mutate(Subject_ID = str_replace(Sample_ID, "_[^_]*$", "")) %>%
+  mutate(Timepoint = str_extract(Sample_ID, "[^_]+$")) %>%
+  mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+levene_res <- proteomics_df_normalized_filtered_long %>%
+  group_by(Protein_Accession) %>%
+  levene_test(value ~ Timepoint) %>%
+  mutate(homog_var = ifelse(p < 0.05, F, T))
+
+dplyr::count(levene_res, homog_var)
+```
+
+## Log2 Data
+
+```{r}
+proteomics_df_normalized_filtered_long_log2 <- proteomics_df_normalized_filtered_long %>%
+  mutate(value = log2(value))
+
+pre_log2 <- proteomics_df_normalized_filtered_long_log2 %>%
+  filter(Timepoint == "Pre")
+
+post_log2 <- proteomics_df_normalized_filtered_long_log2 %>%
+  filter(Timepoint == "Post")
+```
+
+Shapiro-Wilk test (distribution):
+```{r}
+shapiro_res_pre_log2 <- pre_log2 %>%
+  group_by(Protein_Accession) %>%
+  shapiro_test(value) %>%
+  mutate(normal = ifelse(p < 0.05, F, T))
+
+dplyr::count(shapiro_res_pre_log2, normal)
+```
+
+```{r}
+shapiro_res_post_log2 <- post_log2 %>%
+  group_by(Protein_Accession) %>%
+  shapiro_test(value) %>%
+  mutate(normal = ifelse(p < 0.05, F, T))
+
+dplyr::count(shapiro_res_post_log2, normal)
+```
+
+Levene test (homogeneity of variances):
+```{r}
+levene_res_log2 <- proteomics_df_normalized_filtered_long_log2 %>%
+  group_by(Protein_Accession) %>%
+  levene_test(value ~ Timepoint) %>%
+  mutate(homog_var = ifelse(p < 0.05, F, T))
+
+dplyr::count(levene_res_log2, homog_var)
+```
+
+
+A majority of proteins exhibit normal distribution and homogeneity of variance for the log2 transformed data. We will proceed with the log2 data and statistical testing that assumes normality.
+
+Save data:
+```{r}
+# Create protein key 
+prot_key <- proteomics_df %>% select(c(Protein_Accession:Number_Unique_Peptides))
+
+# Format data
+proteomics_df_normalized_filtered_log2 <- proteomics_df_normalized_filtered_long_log2 %>%
+  select(-c(Subject_ID, Timepoint)) %>%
+  pivot_wider(id_cols = "Protein_Accession", names_from = "Sample_ID", values_from = "value") %>%
+  left_join(prot_key, by = "Protein_Accession") %>%
+  relocate(c(Gene_Name:Number_Unique_Peptides), .after = "Protein_Accession")
+
+write.xlsx(proteomics_df_normalized_filtered_log2, "2_ProcessedData/ProcessedData_Proteomics_Norm_Filt_Log2_07.29.2025.xlsx")
+```
+
+
+
+
+

@@ -1,0 +1,606 @@
+---
+title: "Sputum Data Analysis"
+output: html_document
+date: "2025-07-09"
+---
+
+# Load packages
+
+```{r message = FALSE, warning = FALSE}
+# Clears global environment
+rm(list = ls(all.names = TRUE)) 
+
+# If needed, install and load packages
+library(this.path) # For file path
+library(openxlsx) # For data import
+library(tidyverse) # For data organization
+library(janitor) # for df cleaning
+library(rstatix) # For stats testing
+library(patchwork) # For graphing
+library(DT) # For presenting results
+library(ggpubr) # for normality testing QQ plot panel
+library(scales) # for plotting
+
+# Redefine function that is masked
+select <- dplyr::select
+
+# Set working directory
+setwd(this.dir())
+```
+
+# Import and clean data
+
+```{r}
+sputum_df <- read.xlsx("2_ProcessedData/ProcessedData_SputumCellsAndCytokines_07.29.2025.xlsx") %>%
+  clean_names()
+
+demo_df <- read.xlsx("2_ProcessedData/ProcessedData_Demographics_07.29.2025.xlsx") %>%
+  filter(Sputum_Data_Complete == "Yes") %>%
+  clean_names()
+
+sputum_demo_df <- sputum_df %>%
+  left_join(demo_df, by = "subject_id_original")
+```
+
+# Assess normality
+
+Prepare dataframe:
+```{r}
+sputum_df_long <- sputum_df %>%
+  unite(subject_visit, subject_id_original, visit, sep = "_") %>%
+  pivot_longer(!subject_visit, names_to = "endpoint", values_to = "value")
+
+sputum_df_long_log2 <- sputum_df_long %>%
+  mutate(value = log2(value + 1))
+```
+
+Shapiro-Wilk test:
+```{r}
+shapiro_res <- sputum_df_long %>%
+  group_by(endpoint) %>%
+  shapiro_test(value) %>%
+  mutate(normal = ifelse(p < 0.05, F, T))
+
+shapiro_res_log2 <- sputum_df_long_log2 %>%
+  group_by(endpoint) %>%
+  shapiro_test(value) %>%
+  mutate(normal = ifelse(p < 0.05, F, T))
+```
+
+Histograms:
+```{r warning = FALSE}
+hist <- ggplot(sputum_df_long, aes(value)) +
+  geom_histogram(fill = "gray40", color = "black", binwidth = function(x) {(max(x) - min(x))/25}) +
+  facet_wrap(~ endpoint, scales = "free") +
+  labs(y = "# of Observations", x = "Value") +
+  theme(axis.text = element_blank(),
+        axis.title = element_text(size = 20))
+
+hist
+
+hist_log2 <- ggplot(sputum_df_long_log2, aes(value)) +
+  geom_histogram(fill = "gray40", color = "black", binwidth = function(x) {(max(x) - min(x))/25}) +
+  facet_wrap(~ endpoint, scales = "free") +
+  labs(y = "# of Observations", x = "Value") +
+  theme(axis.text = element_blank(),
+        axis.title = element_text(size = 20))
+
+hist_log2
+```
+QQ plots:
+```{r warning = FALSE}
+qq <- ggqqplot(sputum_df_long, x = "value", facet.by = "endpoint", ggtheme = theme_bw(), scales = "free")
+
+qq
+
+qq_log2 <- ggqqplot(sputum_df_long_log2, x = "value", facet.by = "endpoint", ggtheme = theme_bw(), scales = "free")
+
+qq_log2
+```
+
+Homogeneity of variance:
+```{r}
+levene_res <- sputum_df_long %>%
+  group_by(endpoint) %>%
+  separate(subject_visit, into = c("subject", "visit"), sep = "_", extra = "merge") %>%
+  mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs"))) %>%
+  levene_test(value ~ visit) %>%
+  mutate(homog_var = ifelse(p < 0.05, F, T))
+
+levene_res_log2 <- sputum_df_long_log2 %>%
+  group_by(endpoint) %>%
+  separate(subject_visit, into = c("subject", "visit"), sep = "_", extra = "merge") %>%
+  mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs"))) %>%
+  levene_test(value ~ visit) %>%
+  mutate(homog_var = ifelse(p < 0.05, F, T))
+```
+
+Based on histograms and Q-Q plots, we will transform the cytokine data and the "per mg" sputum data by log2 transformation. We will leave the percentages alone.
+```{r}
+sputum_demo_df_transformed <- sputum_demo_df %>%
+  mutate(across(c(il_1b_sputum:tn_fa_sputum), \(x) log2(x + 1))) %>%
+  mutate(across(contains("mg"), \(x) log2(x + 1)))
+```
+
+
+# Run mixed ANOVA
+
+Here, we are going to run a mixed ANOVA using a for-loop instead of an rstatix pipe because for each endpoint, there are mixtures of matching data points. We also want to indicated what the N is for analyses with some missing data. We are omitting sputum_total_sample_weight_mg because there were too many values missing to include all between and within subjects variables. 
+
+## With sex as a between participants factor
+
+We will focus the analysis on sex as the primary between participants variable of interest. 
+
+```{r}
+# Define variables to run the ANOVA on 
+variables <- colnames(sputum_demo_df_transformed %>% select(c(sputum_total_sample_weight_mg:percent_m1_m2_sputum)))
+
+# Create results dataframe
+anova_res_sex <- data.frame()
+
+# Write for loop
+for (i in 2:length(variables)) {
+  
+  variable <- variables[i]
+  
+  df_prep <- sputum_demo_df_transformed %>%
+    select(c(subject_id_original, visit, sex, asthmatic, sym(variable))) %>%
+    mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs")))
+  
+  keep_participants <- df_prep %>%
+    group_by(subject_id_original) %>%
+    summarise(n_missing = sum(is.na(get(variable)))) %>% 
+    filter(n_missing == 0) %>%
+    left_join(demo_df %>% select(c(subject_id_original, sex, asthmatic)), by = "subject_id_original")
+  
+  anova_res <- df_prep %>%
+    filter(subject_id_original %in% keep_participants$subject_id_original) %>%
+    anova_test(dv = sym(variable), wid = subject_id_original, within = visit, between = sex)
+  
+  anova_res_df <- get_anova_table(anova_res) %>%
+    data.frame() %>%
+    mutate(variable = variable) %>%
+    mutate(n = as.character(length(unique(keep_participants$subject_id_original)))) %>%
+    mutate(n_male = as.character(nrow(keep_participants %>% filter(sex == "Male")))) %>%
+    mutate(n_female = as.character(nrow(keep_participants %>% filter(sex == "Female"))))
+  
+  anova_res_sex <- rbind(anova_res_sex, anova_res_df)
+  
+}
+
+# Filter to only significant or close to significant
+anova_res_sex_filtered <- anova_res_sex %>%
+  filter(p < 0.05)
+```
+
+## Stratified by sex
+
+Across visits, stratified by sex, MALE:
+```{r}
+# Define variables to run the ANOVA on 
+variables <- colnames(sputum_demo_df_transformed %>% select(c(sputum_total_sample_weight_mg:percent_m1_m2_sputum)))
+
+# Create results dataframe
+anova_res_visit_male <- data.frame()
+
+# Write for loop
+for (i in 1:length(variables)) {
+  
+  variable <- variables[i]
+  
+  df_prep <- sputum_demo_df_transformed %>%
+    select(c(subject_id_original, visit, sex, sym(variable))) %>%
+    mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs")))
+  
+  keep_participants <- df_prep %>%
+    filter(sex == "Male") %>%
+    group_by(subject_id_original) %>%
+    summarise(n_missing = sum(is.na(get(variable)))) %>% 
+    filter(n_missing == 0) %>%
+    left_join(demo_df %>% select(c(subject_id_original, sex)), by = "subject_id_original")
+  
+  ttest_res <- df_prep %>%
+    filter(subject_id_original %in% keep_participants$subject_id_original) %>%
+    arrange(subject_id_original, visit) %>%
+    pairwise_t_test(as.formula(paste(variable, "~ visit")), paired = TRUE, p.adjust.method = "BH")
+  
+  anova_res_visit_male <- rbind(anova_res_visit_male, ttest_res)
+  
+}
+
+anova_res_visit_male_filtered <- anova_res_visit_male %>%
+  filter(p.adj < 0.1)
+```
+
+Across visits, stratified by sex, FEMALE:
+```{r}
+# Define variables to run the ANOVA on 
+variables <- colnames(sputum_demo_df_transformed %>% select(c(sputum_total_sample_weight_mg:percent_m1_m2_sputum)))
+
+# Create results dataframe
+anova_res_visit_female <- data.frame()
+
+# Write for loop
+for (i in 1:length(variables)) {
+  
+  variable <- variables[i]
+  
+  df_prep <- sputum_demo_df_transformed %>%
+    select(c(subject_id_original, visit, sex, sym(variable))) %>%
+    mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs")))
+  
+  keep_participants <- df_prep %>%
+    filter(sex == "Female") %>%
+    group_by(subject_id_original) %>%
+    summarise(n_missing = sum(is.na(get(variable)))) %>% 
+    filter(n_missing == 0) %>%
+    left_join(demo_df %>% select(c(subject_id_original, sex)), by = "subject_id_original")
+  
+  ttest_res <- df_prep %>%
+    filter(subject_id_original %in% keep_participants$subject_id_original) %>%
+    arrange(subject_id_original, visit) %>%
+    pairwise_t_test(as.formula(paste(variable, "~ visit")), paired = TRUE, p.adjust.method = "BH")
+  
+  anova_res_visit_female <- rbind(anova_res_visit_female, ttest_res)
+  
+}
+
+anova_res_visit_female_filtered <- anova_res_visit_female %>%
+  filter(p.adj < 0.1)
+```
+
+# Post tests
+
+Within visit, by sex:
+```{r}
+# Get variables to test
+anova_res_sex_filtered_sex <- anova_res_sex_filtered %>%
+  filter(Effect == "sex") %>%
+  filter(p < 0.05)
+
+variables_sex_posthoc <- anova_res_sex_filtered_sex$variable %>% unique()
+
+# Create data frame 
+posthoc_sex_ttest <- data.frame()
+
+# Write for loop
+for (i in 1:length(variables_sex_posthoc)) {
+  
+  variable <- variables_sex_posthoc[i]
+  
+  df_prep <- sputum_demo_df_transformed %>%
+    select(c(subject_id_original, visit, sex, sym(variable))) %>%
+    mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs")))
+  
+  keep_participants <- df_prep %>%
+    group_by(subject_id_original) %>%
+    summarise(n_missing = sum(is.na(get(variable)))) %>% 
+    filter(n_missing == 0) %>%
+    left_join(demo_df %>% select(c(subject_id_original, sex)), by = "subject_id_original")
+  
+  ttest_res <- df_prep %>%
+    filter(subject_id_original %in% keep_participants$subject_id_original) %>%
+    group_by(visit) %>%
+    t_test(as.formula(paste(variable, "~ sex")))
+  
+  posthoc_sex_ttest <- rbind(posthoc_sex_ttest, ttest_res)
+  
+}
+
+# Clean up dataframe
+posthoc_sex_ttest_cleaned <- posthoc_sex_ttest %>%
+  mutate(p = format(p, scientific = FALSE, digits = 5)) %>%
+  mutate(significance = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01  ~ "**",
+      p < 0.05  ~ "*",
+      TRUE            ~ ""))
+```
+
+Across visits:
+```{r}
+# Get variables to test
+anova_res_sex_filtered_visit <- anova_res_sex_filtered %>%
+  filter(Effect == "visit") %>%
+  filter(p < 0.05)
+
+variables_visit_posthoc <- anova_res_sex_filtered_visit$variable %>% unique()
+
+# Create data frame 
+posthoc_visit_ttest <- data.frame()
+
+# Write for loop
+for (i in 1:length(variables_visit_posthoc)) {
+  
+  variable <- variables_visit_posthoc[i]
+  
+  df_prep <- sputum_demo_df_transformed %>%
+    select(c(subject_id_original, visit, sex, sym(variable))) %>%
+    mutate(visit = factor(visit, levels = c("Pre", "Post_6hrs", "Post_24hrs")))
+  
+  keep_participants <- df_prep %>%
+    group_by(subject_id_original) %>%
+    summarise(n_missing = sum(is.na(get(variable)))) %>% 
+    filter(n_missing == 0) %>%
+    left_join(demo_df %>% select(c(subject_id_original, sex)), by = "subject_id_original")
+  
+  ttest_res <- df_prep %>%
+    filter(subject_id_original %in% keep_participants$subject_id_original) %>%
+    arrange(subject_id_original, visit) %>%
+    pairwise_t_test(as.formula(paste(variable, "~ visit")), paired = TRUE, p.adjust.method = "BH")
+  
+  posthoc_visit_ttest <- rbind(posthoc_visit_ttest, ttest_res)
+  
+}
+```
+
+
+# Generate summary tables
+
+## Summary statistics
+
+We need to generate summary statistics across various groupings of the data to report in the supplemental tables. We will start by writing out variable names and manually renaming them and reordering them. 
+
+```{r eval = FALSE}
+# Create cleaned variable names and ordering for summary tables
+write.xlsx(sputum_demo_df %>%
+             select(c(visit, select_sputum_wt_mg:percent_m1_m2_sputum)) %>% 
+             pivot_longer(!visit, names_to = "variable", values_to = "value") %>%
+             select(variable) %>% unique(), "1_InputData/VariableNames_SputumCellsCytokines.xlsx")
+```
+
+Then, we can calculate summary statistics in aggregate and stratified by sex. 
+
+```{r}
+# Read in dataframe for cleaning variable names
+sputum_vars <- read.xlsx("1_InputData/VariableNames_SputumCellsCytokines.xlsx")
+
+# Number of participants per endpoint
+nparticipants <- anova_res_sex %>%
+  select(c(variable:n_female)) %>%
+  unique()
+
+# Summary statistics for aggregate data across visits
+summstats_aggregate <- sputum_demo_df %>%
+  select(c(visit, select_sputum_wt_mg:percent_m1_m2_sputum)) %>% 
+  pivot_longer(!visit, names_to = "variable", values_to = "value") %>%
+  group_by(variable, visit) %>%
+  summarise(
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(summary = sprintf("%.2f ± %.2f", mean, sd)) %>%
+  select(-c(mean, sd)) %>%
+  pivot_wider(id_cols = "variable", names_from = "visit", values_from = "summary") %>%
+  left_join(nparticipants, by = "variable") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  relocate(c(n:n_female), .after = "variable") %>%
+  relocate(c(Pre, Post_6hrs, Post_24hrs), .after = "n_female") %>%
+  dplyr::rename("Variable" = "variable", "N" = "n", "N_Female" = "n_female", "N_Male" = "n_male")
+
+# Summary statistics for data stratified by sex across visits
+summstats_bysex <- sputum_demo_df %>%
+  select(c(visit, sex, select_sputum_wt_mg:percent_m1_m2_sputum)) %>% 
+  pivot_longer(-c(visit, sex), names_to = "variable", values_to = "value") %>%
+  group_by(variable, visit, sex) %>%
+  summarise(
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(summary = sprintf("%.2f ± %.2f", mean, sd)) %>%
+  unite("visit_sex", visit, sex, sep = "_") %>%
+  select(variable, visit_sex, summary) %>%
+  pivot_wider(id_cols = "variable", names_from = "visit_sex", values_from = "summary") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  relocate(c(Pre_Male, Post_6hrs_Male, Post_24hrs_Male, Pre_Female, Post_6hrs_Female, Post_24hrs_Female), .after = "variable") %>%
+  dplyr::rename("Variable" = "variable")
+
+# Join together and save data
+summstats_all <- summstats_aggregate %>% left_join(summstats_bysex, by = "Variable")
+
+write.xlsx(summstats_all, "3_OutputTables/SupplementalTableS1_SputumCellsAndCytokines_SummaryStats.xlsx")
+```
+
+## ANOVA results - aggregate
+
+```{r}
+# With sex as a between-participants factor
+anova_res_sex_cleaned <- anova_res_sex %>%
+  select(c(Effect, p, variable)) %>%
+  pivot_wider(id_cols = "variable", names_from = "Effect", values_from = "p") %>%
+  left_join(nparticipants, by = "variable") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  relocate(c(n:n_female), .after = "variable") %>%
+  dplyr::rename("Variable" = "variable", "Sex" = "sex", "Visit" = "visit", "Sex*Visit" = "sex:visit", 
+                "N" = "n", "N_Female" = "n_female", "N_Male" = "n_male")
+  
+# Post test results
+posthoc_sex_ttest_cleaned_2 <- posthoc_sex_ttest %>% 
+  unite(groups, group1, group2, sep = " vs. ") %>%
+  unite(visit, visit, groups, sep = " ") %>%
+  dplyr::rename("variable" = ".y.") %>%
+  select(visit, variable, p) %>%
+  pivot_wider(id_cols = "variable", names_from = "visit", values_from = "p") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  dplyr::rename("Variable" = "variable")
+
+posthoc_visit_ttest_cleaned <- posthoc_visit_ttest %>%
+  unite(groups, group1, group2, sep = " vs. ") %>%
+  dplyr::rename("variable" = ".y.") %>%
+  select(groups, variable, p) %>%
+  pivot_wider(id_cols = "variable", names_from = "groups", values_from = "p") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  dplyr::rename("Variable" = "variable")
+
+# Join together results and write out
+anova_res_cleaned <- anova_res_sex_cleaned %>%
+  left_join(posthoc_sex_ttest_cleaned_2, by = "Variable") %>%
+  left_join(posthoc_visit_ttest_cleaned, by = "Variable")
+
+write.xlsx(anova_res_cleaned, "3_OutputTables/SupplementalTableS2_SputumCellsAndCytokines_AggregateANOVAResults.xlsx")
+```
+
+## ANOVA results - stratified
+
+```{r}
+# Stratified analysis, males
+anova_res_visit_male_cleaned <- anova_res_visit_male %>%
+  unite(groups, group1, group2, sep = " vs. ") %>%
+  dplyr::rename("variable" = ".y.") %>%
+  filter(variable != "sputum_total_sample_weight_mg") %>%
+  select(c(variable, groups, p.adj)) %>% 
+  pivot_wider(id_cols = "variable", names_from = "groups", values_from = "p.adj") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  dplyr::rename("Variable" = "variable") %>%
+  rename_with(.fn = ~ paste0("Male ", .), .cols = -Variable)
+
+# Stratified analysis, females 
+anova_res_visit_female_cleaned <- anova_res_visit_female %>%
+  unite(groups, group1, group2, sep = " vs. ") %>%
+  dplyr::rename("variable" = ".y.") %>%
+  filter(variable != "sputum_total_sample_weight_mg") %>%
+  select(c(variable, groups, p.adj)) %>% 
+  pivot_wider(id_cols = "variable", names_from = "groups", values_from = "p.adj") %>%
+  left_join(sputum_vars, by = "variable") %>%
+  mutate(variable = factor(clean_name, levels = sputum_vars$clean_name)) %>%
+  arrange(variable) %>%
+  select(-clean_name) %>%
+  dplyr::rename("Variable" = "variable") %>%
+  rename_with(.fn = ~ paste0("Female ", .), .cols = -Variable)
+
+# Join together results and write out
+anova_res_stratified_cleaned <- anova_res_visit_male_cleaned %>%
+  left_join(anova_res_visit_female_cleaned, by = "Variable")
+
+write.xlsx(anova_res_stratified_cleaned, "3_OutputTables/SupplementalTableS3_SputumCellsAndCytokines_StratifiedBySexResults.xlsx")
+```
+
+# Visualize results
+
+Based on these results, we will make two figure panels, one for earlier in the paper with just the sputum differentials and cytokine concentrations, and one later in the paper, with the M1 and M2 macrophage markers. For simplicity, signficance markers will be added afterward in PowerPoint. 
+
+Figure panel 1: 
+```{r warning = FALSE}
+# Variables to plot
+variables_panel1 <- c("sputum_pmn_cells_per_mg", "sputum_percent_pmn", "sputum_percent_macs", "sputum_macs_cells_per_mg", 
+                      "il_1b_sputum", "il_6_sputum", "il_8_sputum")
+
+# Filter data to only include these variables
+data_panel1 <- sputum_demo_df_transformed %>% 
+  select(subject_id_original, visit, sex, all_of(variables_panel1)) %>%
+  mutate(visit = recode(visit, "Post_6hrs" = "6 Hours Post", "Post_24hrs" = "24 Hours Post")) %>%
+  mutate(visit = factor(visit, levels = c("Pre", "6 Hours Post", "24 Hours Post"))) %>%
+  pivot_longer(-c(subject_id_original, visit, sex), names_to = "variable", values_to = "value") %>%
+  mutate(variable = factor(variable, levels = c("sputum_pmn_cells_per_mg", "sputum_percent_pmn", 
+                                                "sputum_macs_cells_per_mg", "sputum_percent_macs", "il_1b_sputum",
+                                                "il_6_sputum", "il_8_sputum")))
+
+# Create new data labels
+new_labels_panel1 <- c("sputum_pmn_cells_per_mg" = "PMN/mg", "sputum_percent_pmn" = "PMN %", "sputum_macs_cells_per_mg" = "Macrophages/mg", "sputum_percent_macs" = "Macrophage %", "il_1b_sputum" = "IL-1\u03b2 (ng/mL)", "il_6_sputum" = "IL-6 (ng/mL)", "il_8_sputum" = "IL-8 (ng/mL)")
+
+# Create figure panel
+panel1 <- ggplot(data_panel1) +
+  
+  geom_point(aes(x = visit, y = value, color = sex), 
+             size = 0.5, alpha = 0.6,
+             position = position_jitterdodge(dodge.width = 0.1)) +
+  
+  stat_summary(aes(x = visit, y = value, group = sex, color = sex), 
+               fun = mean, geom = "line", size = 0.5) +
+  
+  stat_summary(aes(x = visit, y = value, group = sex, color = sex), 
+               fun.data = ~mean_sdl(.x, mult = 1), geom = "errorbar", width = 0.4, size = 0.5) +
+  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.5))) +
+  scale_x_discrete(labels = label_wrap(width = 10)) +
+  scale_colour_manual(values = c("#bd53bd", "#007be5"), name = "Sex") +
+  
+  theme(axis.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.text = element_text(face = "bold", size = 12),
+        strip.background = element_rect(fill = "grey90")) + 
+  
+  facet_wrap(~variable, nrow = 2, scales = "free_y", labeller = labeller(variable = new_labels_panel1)) 
+
+panel1
+
+png("4_OutputFigures/SputumPanel_Differentials.png", width = 9.5, height = 5.5, res = 1200, units = "in")
+panel1
+invisible(dev.off())
+
+panel1
+```
+
+Figure panel 2:
+```{r warning = FALSE}
+# Variables to plot
+variables_panel2 <- c("percent_m1_sputum", "percent_m2_sputum")
+
+# Filter data to only include these variables
+data_panel2 <- sputum_demo_df_transformed %>% 
+  select(subject_id_original, visit, sex, all_of(variables_panel2)) %>%
+  mutate(visit = recode(visit, "Post_6hrs" = "6 Hours Post", "Post_24hrs" = "24 Hours Post")) %>%
+  mutate(visit = factor(visit, levels = c("Pre", "6 Hours Post", "24 Hours Post"))) %>%
+  pivot_longer(-c(subject_id_original, visit, sex), names_to = "variable", values_to = "value") %>%
+  mutate(variable = factor(variable, levels = c("percent_m1_sputum", "percent_m2_sputum")))
+
+# Create new data labels
+new_labels_panel2 <- c("percent_m1_sputum" = "Macrophage % iNOS+", "percent_m2_sputum" = "Macrophage % CD301+")
+
+# Create figure panel
+panel2 <- ggplot(data_panel2) +
+  
+  geom_point(aes(x = visit, y = value, color = sex), 
+             size = 0.5, alpha = 0.6,
+             position = position_jitterdodge(dodge.width = 0.1)) +
+  
+  stat_summary(aes(x = visit, y = value, group = sex, color = sex), 
+               fun = mean, geom = "line", size = 0.5) +
+  
+  stat_summary(aes(x = visit, y = value, group = sex, color = sex), 
+               fun.data = ~mean_sdl(.x, mult = 1), geom = "errorbar", width = 0.5, size = 0.5) +
+  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.5))) +
+  scale_x_discrete(labels = label_wrap(width = 10)) +
+  scale_colour_manual(values = c("#bd53bd", "#007be5"), name = "Sex") +
+  
+  theme(axis.title = element_blank(),
+        panel.grid = element_blank(),
+        strip.text = element_text(face = "bold", size = 9),
+        strip.background = element_rect(fill = "grey90")) + 
+  
+  facet_wrap(~variable, nrow = 1, scales = "free_y", labeller = labeller(variable = new_labels_panel2)) 
+
+panel1
+
+png("4_OutputFigures/SputumPanel_MacrophageSubtypes.png", width = 5.5, height = 3, res = 1200, units = "in")
+panel2
+invisible(dev.off())
+
+panel2
+```
+
+
+
+
+

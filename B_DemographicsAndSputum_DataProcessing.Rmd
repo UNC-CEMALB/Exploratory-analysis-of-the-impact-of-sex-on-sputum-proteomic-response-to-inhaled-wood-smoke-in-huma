@@ -1,0 +1,175 @@
+---
+title: "Demographics and Sputum Data Processing"
+output: html_document
+date: "2025-07-09"
+---
+
+# Load packages
+
+```{r message = FALSE, warning = FALSE}
+# Clears global environment
+rm(list = ls(all.names = TRUE)) 
+
+# If needed, install and load packages
+library(this.path) # For file path
+library(openxlsx) # For data import
+library(tidyverse) # For data organization
+library(janitor) # for df cleaning
+library(rstatix) # For stats testing
+library(table1) # For creating demographics table
+
+# Redefine function that is masked
+select <- dplyr::select
+
+# Set working directory
+setwd(this.dir())
+```
+
+# Data import and cleaning
+
+Import:
+```{r}
+demo_sputum <- read.xlsx("1_InputData/RawData_Demo_SputumCells_Cytokines_07.09.2025.xlsx", sheet = 1)
+
+demo_race <- read.xlsx("1_InputData/RawData_Demo_SputumCells_Cytokines_07.09.2025.xlsx", sheet = 2) %>% 
+  mutate(Subject.ID = str_trim(as.character(Subject.ID), side = "right"))
+
+demo_proteomics <- read.xlsx("1_InputData/RawData_Demo_SputumCells_Cytokines_07.09.2025.xlsx", sheet = 3)
+```
+
+Clean up demographics data, step 1:
+```{r}
+demo <- demo_sputum %>% 
+  unite(join_col, Sex, Ethnicity, age.at.consent, BMI, Disease.State, sep = "_", remove = FALSE) %>%
+  filter(Visit == "Screen") %>%
+  select(c(Subject, Sex, Ethnicity, age.at.consent, Height.cm, Weight.kg, BMI, Disease.State, join_col)) %>%
+  mutate(Subject = as.character(Subject)) %>%
+  left_join(demo_race, join_by("Subject" == "Subject.ID")) %>%
+  mutate(Race = str_replace(Race, "\\s*\\(.*", "")) %>%
+  mutate(Race = recode(Race, "African American" = "Black", "Caucasian" = "White"),
+         Ethnicity = recode(Ethnicity, "NotHispanic/Latino" = "No", "Hispanic/Latino" = "Yes"),
+         Disease.State = recode(Disease.State, "Control" = "No", "Asthmatic" = "Yes")) %>% 
+  dplyr::rename("Subject_ID_Original" = "Subject", "Hispanic_or_Latino" = "Ethnicity", "Age_at_Consent" = "age.at.consent", "Height_cm" = "Height.cm",
+                "Weight_kg" = "Weight.kg", "Asthmatic" = "Disease.State", "Race_Other" = "Please.specify.other.race") %>%
+  relocate(c(Asthmatic, Race, Race_Other), .before = "Hispanic_or_Latino")
+```
+
+Clean up proteomics demo data for joining to demographic data, including creating a unique combination of gender, ethnicity, age, and disease status to use for joining the demographics dataframes. Some of this demographic data in this dataframe is not correct/updated, so we will remove much of it and just extract the IDs. 
+```{r}
+demo_proteomics_cleaned <- demo_proteomics %>% 
+  unite(join_col, Gender, Ethnicity, age.at.consent, BMI, Disease_State, sep = "_", remove = FALSE) %>%
+  select(c(Subject_ID, join_col)) %>%
+  dplyr::rename("Subject_ID_Proteomics" = "Subject_ID") %>%
+  mutate(Proteomics_Run = "Yes")
+```
+
+Join the proteomics IDs to the existing demographics dataframe:
+```{r}
+demo_intermediate <- demo %>%
+  left_join(demo_proteomics_cleaned, by = "join_col") %>%
+  select(-join_col) %>%
+  mutate(Proteomics_Run = replace_na(Proteomics_Run, "No"))
+```
+
+Assess which participants had sputum data:
+```{r}
+sputum_screen_participants <- demo_sputum %>%
+  filter(Visit == "Screen") %>%
+  filter(!is.na(Select.Sputum.Wt.mg)) %>%
+  filter(!Sputum.Total.Cell.Count == 0) %>%
+  select(Subject) %>%
+  mutate(sputum_screen = "yes")
+
+sputum_post_participants <- demo_sputum %>%
+  filter(Visit == "Post") %>%
+  filter(!is.na(Select.Sputum.Wt.mg)) %>%
+  filter(!Sputum.Total.Cell.Count == 0) %>%
+  select(Subject) %>%
+  mutate(sputum_post = "yes")
+
+sputum_fu_participants <- demo_sputum %>%
+  filter(Visit == "FU") %>%
+  filter(!is.na(Select.Sputum.Wt.mg)) %>%
+  filter(!Sputum.Total.Cell.Count == 0) %>%
+  select(Subject) %>%
+  mutate(sputum_fu = "yes")
+
+sputum_tabulation <- demo_sputum %>%
+  select(Subject, Visit) %>% 
+  filter(Visit == "Screen") %>%
+  left_join(sputum_screen_participants, by = "Subject") %>%
+  left_join(sputum_post_participants, by = "Subject") %>%
+  left_join(sputum_fu_participants, by = "Subject") %>%
+  na.omit() %>% 
+  mutate(Sputum_Data_Complete = "Yes") %>%
+  mutate(Subject = as.character(Subject))
+
+nrow(sputum_tabulation)
+```
+
+There were 49 participants for which there are matching sputum data across all three time points, so we will continue the analysis with data from these participants. We will join information about participants with this data to the demographics dataframe. 
+
+```{r}
+# Create final dataframe
+demo_final <- demo_intermediate %>%
+  left_join(sputum_tabulation %>% select(Subject, Sputum_Data_Complete), join_by("Subject_ID_Original" == "Subject")) %>%
+  mutate(Sputum_Data_Complete = replace_na(Sputum_Data_Complete, "No"))
+
+# Write out
+write.xlsx(demo_final, "2_ProcessedData/ProcessedData_Demographics_07.29.2025.xlsx")
+```
+
+Lastly, we can create a dataframe with the sputum data for later analysis.
+```{r}
+# Create final dataframe
+sputum_data <- demo_sputum %>%
+  select(Subject, Visit, 'Sputum.Total.Sample.Weight.mg':'percent.M1-M2.Sputum') %>%
+  mutate(Subject = as.character(Subject)) %>%
+  filter(Subject %in% sputum_tabulation$Subject) %>%
+  mutate(Visit = recode(Visit, "Screen" = "Pre", "Post" = "Post_6hrs", "FU" = "Post_24hrs")) %>%
+  dplyr::rename("Subject_ID_Original" = "Subject")
+
+# Write out
+write.xlsx(sputum_data, "2_ProcessedData/ProcessedData_SputumCellsAndCytokines_07.29.2025.xlsx")
+```
+
+# Demographics tabe generation
+
+First, we will create a function for a custom table in the table generated by the table1 package such that mean +/- standard deviation is shown for continuous variables. 
+```{r}
+my.render.cont <- function(x) {
+  with(stats.apply.rounding(stats.default(x), digits=2), c("",
+                                                           "Mean (SD)"=sprintf("%s (&plusmn; %s)", MEAN, SD)))
+}
+```
+
+Then, we will stack dataframes containing information for all participants, those with complete sputum data, and those whose proteomics data were analyzed so that they can all be rendered into one table.
+```{r}
+demo_all_fortable <- demo_final %>%
+  mutate(table_group = "Recruited")
+
+demo_sputum_fortable <- demo_final %>% 
+  filter(Sputum_Data_Complete == "Yes") %>%
+  mutate(table_group = "Sufficient Sputum")
+
+demo_proteomics_fortable <- demo_final %>%
+  filter(Proteomics_Run == "Yes") %>%
+  mutate(table_group = "Proteomic Analysis")
+
+demographics_table_input <- rbind(demo_all_fortable, demo_sputum_fortable, demo_proteomics_fortable) %>%
+  mutate(table_group = factor(table_group, levels = c("Recruited", "Sufficient Sputum", "Proteomic Analysis")))
+```
+
+Lastly, we can create the table.
+```{r}
+demotable <- table1(~ Asthmatic + Race + Hispanic_or_Latino + Age_at_Consent + BMI | table_group*Sex, 
+       data = demographics_table_input, 
+       render.continuous = my.render.cont,
+       overall = NULL)
+
+demotable
+```
+
+
+
+

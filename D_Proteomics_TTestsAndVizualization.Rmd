@@ -1,0 +1,733 @@
+---
+title: "T-Tests and Associated Visualizations (Volcano Plots, Euler Diagram)"
+output: html_document
+date: "2025-07-01"
+---
+
+# Load packages
+
+```{r message = FALSE, warning = FALSE}
+# Clears global environment
+rm(list = ls(all.names = TRUE)) 
+
+# If needed, install and load packages
+library(this.path) # For file path
+library(openxlsx) # For data import
+library(tidyverse) # For data organization
+library(rstatix) # For statistics
+library(purrr) # for summary stats
+library(ggrepel) # for ggplot text labels
+library(cowplot) # for plot themes
+library(eulerr) # for venn diagrams
+
+# Redefine function that is masked
+select <- dplyr::select
+rename <- dplyr::rename
+
+# Set color theme
+theme_set(theme_bw())
+
+# Set working directory
+setwd(this.dir())
+```
+
+# Import data
+```{r}
+prot_data <- read.xlsx("2_ProcessedData/ProcessedData_Proteomics_Norm_Filt_Log2_07.29.2025.xlsx")
+
+proteomics_short <- prot_data %>% 
+  select(-c(Gene_Name, Protein_Descriptions, Number_Unique_Peptides)) %>%
+  mutate(Protein_Name = gsub("_HUMAN", "", Protein_Name)) %>%
+  pivot_longer(-c(Protein_Accession, Protein_Name), names_to = "Sample_ID", values_to = "value") %>%
+  separate(Sample_ID, into = c(NA, "Sex", "ID", "Timepoint")) %>%
+  pivot_wider(id_cols = c(ID, Protein_Name, Protein_Accession, Sex), names_from = "Timepoint", values_from = "value")
+```
+
+# T-tests
+
+This loop will generate T-tests across each protein for Pre and Post across all subjects.
+```{r}
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_short$Protein_Name)
+
+#create an empty dataframe for the loop function to place values into.
+ttest_mean_res <- data.frame()
+
+for (i in 1:length(proteins)) {
+  
+  # Isolate data only for the relevant Protein_Name in the loop.
+  All_filtered <- proteomics_short %>% 
+    filter(Protein_Name == proteins[i])
+  
+  # Make list objects that hold the mean and sd values.
+  Pre_Mean <- mean(All_filtered$Pre)
+  Pre_SD <- sd(All_filtered$Pre)
+  
+  Post_Mean <- mean(All_filtered$Post)
+  Post_SD <- sd(All_filtered$Post)
+
+  
+  # Runs T-tests on Pre vs Post.
+  ttest <- t.test(All_filtered$Pre, All_filtered$Post, paired = TRUE)
+
+  # Isolate p-value from ttest_res to place in ttest_pre.post later in the chunk.
+  Pval <- ttest$p.value
+
+  # This list will be used to add the appropriate protein name to ttest_pre.post.
+  Protein_Name <- proteins[i] 
+  
+  # Protein Accession 
+  Protein_Accession <- unique(All_filtered$Protein_Accession)
+  
+  # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
+  res <- data.frame(Protein_Name, Protein_Accession, Pre_Mean, Pre_SD, Post_Mean, Post_SD, Pval)
+
+  ttest_mean_res <- rbind(res, ttest_mean_res)
+  
+}
+
+ttest_mean_res$p.adj <-  p.adjust(ttest_mean_res$Pval, "fdr")
+```
+
+This script tests for differences in protein expression between males and females at baseline:
+```{r}
+# Run stats
+proteomics_short_pre <- proteomics_short %>%
+  group_by(Protein_Accession) %>% 
+  t_test(Pre ~ Sex) %>%
+  mutate(padj = p.adjust(p, method = "fdr")) %>%
+  left_join(proteomics_short %>% select(c(Protein_Name, Protein_Accession)) %>% unique(), by = "Protein_Accession")
+
+# Calculate fold change
+proteomics_pre_foldchange <- proteomics_short %>%
+  select(-Post) %>%
+  group_by(Sex, Protein_Accession) %>%
+  summarise(mean_expr = mean(Pre)) %>%
+  pivot_wider(id_cols = "Protein_Accession", names_from = "Sex", values_from = "mean_expr") %>%
+  rename("Male" = "M", "Female" = "F") %>%
+  mutate(Log2FC_MvsF = Male - Female) %>% 
+  select(c(Protein_Accession, Log2FC_MvsF))
+
+# Combine dataframes
+proteomics_pre_sex_analysis <- proteomics_short_pre %>%
+  left_join(proteomics_pre_foldchange, by = "Protein_Accession")
+
+# How many proteins are differentially expressed between males and females?
+nrow(proteomics_pre_sex_analysis %>% filter(p < 0.05))
+
+# How many proteins are increased in males?
+nrow(proteomics_pre_sex_analysis %>% filter(p < 0.05) %>% filter(Log2FC_MvsF > 0))
+
+# How many proteins are differentially expressed between males and females?
+nrow(proteomics_pre_sex_analysis %>% filter(p < 0.05) %>% filter(Log2FC_MvsF < 0))
+```
+
+This loop will generate T-tests across each protein for Pre and Post across subjects stratified by sex.
+```{r}
+# Make new dfs that isolate for only males or females.
+M_pre.post <- proteomics_short %>% 
+  filter(Sex == "M")
+
+F_pre.post <- proteomics_short %>% 
+  filter(Sex == "F")
+
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_short$Protein_Name)
+
+#create an empty dataframe for the loop function to place values into.
+ttest_mean_res_sex <- data.frame()
+
+for (i in 1:length(proteins)) {
+  
+  # Isolate data only for the relevant Protein_Name in the loop.
+  M_filtered <- M_pre.post %>%
+    filter(Protein_Name == proteins[i])
+  
+  F_filtered <- F_pre.post %>%
+    filter(Protein_Name == proteins[i])
+  
+  # Make list objects that hold the mean and sd values.
+  M_Pre_Mean <- mean(M_filtered$Pre)
+  M_Pre_SD <- sd(M_filtered$Pre)
+  M_Post_Mean <- mean(M_filtered$Post)
+  M_Post_SD <- sd(M_filtered$Pre)
+  
+  F_Pre_Mean <- mean(F_filtered$Pre)
+  F_Pre_SD <- sd(F_filtered$Pre)
+  F_Post_Mean <- mean(F_filtered$Post)
+  F_Post_SD <- sd(F_filtered$Post)
+  
+  # Runs T-tests on Pre vs Post.
+  M_ttest <- t.test(M_filtered$Pre, M_filtered$Post, paired = TRUE)
+  F_ttest <- t.test(F_filtered$Pre, F_filtered$Post, paired = TRUE)
+
+  # Isolate p-value from ttest_res to place in ttest_pre.post later in the chunk.
+  M_Pval <- M_ttest$p.value
+  F_Pval <- F_ttest$p.value
+
+  # This list will be used to add the appropriate protein name to ttest_pre.post.
+  Protein_Name <- proteins[i] 
+  
+  # Protein Accession 
+  Protein_Accession <- unique(M_filtered$Protein_Accession)
+  
+  # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
+  res <- data.frame(Protein_Name, Protein_Accession, M_Pre_Mean, M_Pre_SD, M_Post_Mean, M_Post_SD, M_Pval, F_Pre_Mean, F_Pre_SD, F_Post_Mean, F_Post_SD, F_Pval)
+  
+  ttest_mean_res_sex <- rbind(res, ttest_mean_res_sex)
+  
+}
+
+ttest_mean_res_sex$M_p.adj <-  p.adjust(ttest_mean_res_sex$M_Pval, "fdr")
+ttest_mean_res_sex$F_p.adj <-  p.adjust(ttest_mean_res_sex$F_Pval, "fdr")
+```
+
+
+# Fold change calculation
+
+Fold change is defined as FC = Log2(post) - Log2(pre), or in this case FC = post - pre since our data are already log2 transformed. The following script creates a df that determines the FC of each protein across each person. This will be used in future code chunks to summarize the FCs by different metrics.
+
+```{r}
+# Create a list of proteins that the loop function will assess.
+proteins <- unique(proteomics_short$Protein_Name)
+
+# Create an empty dataframe for the loop function to place values into.
+Log2_FC.df <- data.frame()
+ 
+for (i in 1:length(proteins)) {
+  
+  # Isolate data only for the relevant Protein_Name in the loop.
+  filtered <- proteomics_short %>% 
+    filter(Protein_Name == proteins[i])
+  
+  # Calculate the FC  
+  Log2_FC <- filtered$Post - filtered$Pre
+
+  # This list will be used to add the appropriate protein name to ttest_pre.post.
+  Protein_Name <- proteins[i] 
+  
+  # I will want the ID across each protein FC labeled   
+  ID <- filtered %>% 
+    select("ID", "Sex") %>% 
+    unique()
+  
+  # Put all needed values into a df that we will bind to the empty ttest_pre.post df.
+  res <- data.frame(ID, Protein_Name, Log2_FC)
+
+  Log2_FC.df <- rbind(res, Log2_FC.df)
+  
+}  
+```
+
+Generate summary statistics.
+```{r}
+# This df will hold the FC means and SDs across all proteins 
+Log2_FC_Mean <- Log2_FC.df %>% 
+  group_by(Protein_Name) %>% 
+  summarise(
+    Log2_FC_mean = mean(Log2_FC),
+    SD = sd(Log2_FC)) %>% 
+  select(c(Protein_Name, Log2_FC_mean, SD))  
+  
+colnames(Log2_FC_Mean)[colnames(Log2_FC_Mean) == "Log2_FC_mean"] <- "Log2_FC"
+```
+
+To calculate Log2FC by sex:
+```{r}
+# This df will hold the FC means and SDs across all proteins by sex stratification
+Log2_FC_bySex <- Log2_FC.df %>% 
+  group_by(Sex, Protein_Name) %>% 
+  summarise(
+    .groups = 'drop',
+    Log2_FC_Mean = mean(Log2_FC),
+    SD = sd(Log2_FC)) %>% 
+  pivot_wider(names_from = Sex,
+              values_from = c(Log2_FC_Mean, SD)) %>% 
+  rename("F_Log2_FC" = "Log2_FC_Mean_F", 
+         "F_SD" = "SD_F", 
+         "M_Log2_FC" = "Log2_FC_Mean_M", 
+         "M_SD" = "SD_M")
+```
+
+
+Now we will attach the Lgo2 FC means to the the p-values generated from the T-Test loop.
+```{r}
+# Isolate P-values 
+Pval <- ttest_mean_res %>% 
+  select(c(Protein_Name, Protein_Accession, Pval, p.adj))
+
+# Merge the log2 FC means and p-values.
+Log2_FC_Mean <- merge(Log2_FC_Mean, Pval, by = "Protein_Name")
+
+# Reorder the columns in Log2_FC_Sex
+Log2_FC_Mean <- Log2_FC_Mean %>% 
+  select(Protein_Name, Protein_Accession, Log2_FC, SD, Pval, p.adj)
+
+
+nrow(Log2_FC_Mean %>% filter(Pval < 0.05))
+```
+
+And we can do the same for the sex-stratified data:
+```{r}
+# Isolate P-values corresponding to males and females
+Pval_Sex <- ttest_mean_res_sex %>% 
+  select(c(Protein_Name, Protein_Accession, F_Pval, F_p.adj, M_Pval, M_p.adj))
+
+# Merge the FC means and p-values.
+Log2_FC_Sex <- merge(Log2_FC_bySex, Pval_Sex, by = "Protein_Name")
+
+# Reorder the columns in Log2_FC_Sex
+Log2_FC_Sex <- Log2_FC_Sex %>% 
+  select(Protein_Name, Protein_Accession, M_Log2_FC, M_SD, M_Pval, M_p.adj, F_Log2_FC, F_SD, F_Pval, F_p.adj)
+```
+
+# Prepare supplemental table
+
+```{r}
+diffexpr_res_cleaned <- Log2_FC_Mean %>%
+  select(-SD) %>%
+  rename("P_Value" = "Pval", "P_Value_Adj" = "p.adj") %>%
+  left_join(Log2_FC_Sex %>% select(-Protein_Name), by = "Protein_Accession") %>%
+  select(-c(M_SD, F_SD)) %>%
+  rename_with(.fn = ~ str_replace(., "M_", "Male_"), .cols = all_of(everything())) %>%
+  rename_with(.fn = ~ str_replace(., "F_", "Female_"), .cols = all_of(everything())) %>%
+  rename_with(.fn = ~ str_replace(., "Pval", "P_Value"), .cols = all_of(everything())) %>%
+  rename_with(.fn = ~ str_replace(., "p.adj", "P_Value_Adj"), .cols = all_of(everything())) %>%
+  rename_with(.fn = ~paste0("Post vs. Pre ", .), .cols = -c(Protein_Name, Protein_Accession)) %>% 
+  left_join(proteomics_pre_sex_analysis %>% select(c(Protein_Accession, p, padj, Log2FC_MvsF)), by = "Protein_Accession") %>%
+  dplyr::rename("Pre Male vs. Female Log2_FC" = "Log2FC_MvsF", "Pre Male vs. Female P_Value" = "p", "Pre Male vs. Female P_Value_Adj" = "padj")
+
+write.xlsx(diffexpr_res_cleaned, "3_OutputTables/SupplementalTableS4_Proteomics_DifferentialExpressionResults.xlsx")
+```
+
+
+# Visualizations
+
+## Prepare data for visualization
+
+Make separate dfs for labeling proteins in the volcano plots.
+```{r}
+# All subjects
+Log2_FC_Top <- Log2_FC_Mean %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(Pval < 0.05) %>% 
+  arrange(desc(abs(Log2_FC)))
+
+All_Top10 <- Log2_FC_Top[1:10,] # Select the top 10 proteins
+prots_to_label_mean <- unlist(All_Top10$Protein_Name)
+
+# Male subjects only
+FC_Male_Top <- Log2_FC_Sex[,1:5] # Select just the male cols
+FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(M_Pval < 0.05) %>% 
+  arrange(desc(abs(M_Log2_FC)))
+
+Male_Top10 <- FC_Male_Top[1:10,] # Select the top 10 proteins
+prots_to_label_male <- unlist(Male_Top10$Protein_Name)
+
+# Female subjects only
+FC_Female_Top <- Log2_FC_Sex[,c(1, 6:9)] # Select just the female cols
+FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(F_Pval < 0.05) %>% 
+  arrange(desc(abs(F_Log2_FC)))
+
+Female_Top10 <- FC_Female_Top[1:10,] # Select the top 10 proteins
+prots_to_label_female <- unlist(Female_Top10$Protein_Name)
+```
+
+## Volcano plots
+
+Generate volcano plots that show increased and decreased proteins across all subjects. Only proteins with p < 0.05 will be considered significant. We will start with a plot with all participants.
+
+```{r}
+# Add a column of NAs
+Log2_FC_Mean$diffexpressed <- "NS"
+
+# If FC > 0 and pvalue < 0.05, set as "Increased" 
+Log2_FC_Mean$diffexpressed[Log2_FC_Mean$Log2_FC > 0 & Log2_FC_Mean$Pval < 0.05] <- "Increased"
+
+# If FC < 0 and pvalue < 0.05, set as "Decreased"
+Log2_FC_Mean$diffexpressed[Log2_FC_Mean$Log2_FC < 0 & Log2_FC_Mean$Pval < 0.05] <- "Decreased"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+Log2_FC_Mean$delabel <- NA
+Log2_FC_Mean$delabel[Log2_FC_Mean$diffexpressed != "NS"] <- Log2_FC_Mean$Protein_Name[Log2_FC_Mean$diffexpressed != "NS"]
+
+# Create the plot
+FC_Volcano <- Log2_FC_Mean %>% 
+  ggplot(
+    aes(x = Log2_FC, y = -log10(Pval), color = diffexpressed, label = delabel)) +
+        geom_point(alpha = 0.7) + 
+        scale_color_manual(values = c("blue", "red", "gray") , 
+                           breaks = c("Decreased", "Increased", "NS")) +
+        
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+        geom_label_repel(data = Log2_FC_Mean %>% filter(Protein_Name %in% prots_to_label_mean),
+                        show.legend = FALSE,
+                        max.overlaps = 12,
+                        fill = "white",
+                        size = 5,
+                        label.r = 0.2,
+                        label.size = 0.5,
+                        min.segment.length = 0,
+                        color = "blue") + 
+
+        xlim(-2, 1.5) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 4)) +
+  
+        labs(y = bquote(~-Log[10]~'(p-value)'), 
+             x = bquote(~Log[2]~'(Fold Change)'),
+             title = "All Participants",
+             subtitle = "24 Hours Post vs. Pre") +
+      
+        theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+              plot.subtitle = element_text(size = 15, hjust = 0.5, face = "italic"),
+              axis.line = element_line(colour = "black"), 
+              axis.title  = element_text(size = 17),
+              axis.title.x = element_text(margin = ggplot2::margin(t = 15)),
+              axis.title.y = element_text(margin = ggplot2::margin(r = 15)),
+              axis.text = element_text(size = 15),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              legend.title = element_blank(),
+              legend.text = element_text(size = 15),
+              legend.position = c(0.8, 0.8),
+              legend.justification = "center",
+              legend.box.background = element_rect(color = "gray25"))   
+          
+FC_Volcano
+
+png("4_OutputFigures/VolcanoAll.png", width = 5.5, height = 5.25, units = "in", res = 1200)
+FC_Volcano
+invisible(dev.off())
+```
+
+Then we can plot just the males:
+```{r}
+# Select for male subjects.
+M_FC <- Log2_FC_Sex %>% 
+   select(c(Protein_Name, M_Log2_FC, M_Pval))
+
+# Add a column of NAs
+M_FC$diffexpressed <- "NS"
+
+# If FC > 0 and pvalue < 0.05, set as "Increased" 
+M_FC$diffexpressed[M_FC$M_Log2_FC > 0 & M_FC$M_Pval < 0.05] <- "Increased"
+
+# If FC < -0.6 and pvalue < 0.05, set as "Decreased"
+M_FC$diffexpressed[M_FC$M_Log2_FC < 0 & M_FC$M_Pval < 0.05] <- "Decreased"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" that contains the name of proteins differentially expressed (NA in case they are not)
+M_FC$delabel <- NA
+M_FC$delabel[M_FC$diffexpressed != "NS"] <- M_FC$Protein_Name[M_FC$diffexpressed != "NS"]
+
+# Create the plot
+M_Volcano <- M_FC %>% 
+  ggplot(
+    aes(x = M_Log2_FC, y = -log10(M_Pval), color = diffexpressed, label = delabel)) +
+        geom_point(alpha = 0.7) + 
+        scale_color_manual(values = c("blue", "red", "gray") , 
+                           breaks = c("Decreased", "Increased", "NS")) +
+        
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+        geom_label_repel(data = M_FC %>% filter(Protein_Name %in% prots_to_label_male),
+                         aes(color = diffexpressed),
+                        show.legend = FALSE,
+                        max.overlaps = 12,
+                        fill = "white",
+                        size = 5,
+                        label.r = 0.2,
+                        label.size = 0.5,
+                        min.segment.length = 0) + 
+
+        xlim(-2, 1.5) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 4)) +
+  
+        labs(y = bquote(~-Log[10]~'(p-value)'), 
+             x = bquote(~Log[2]~'(Fold Change)'),
+             title = "Males",
+             subtitle = "24 Hours Post vs. Pre") +
+      
+        theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+              plot.subtitle = element_text(size = 15, hjust = 0.5, face = "italic"),
+              axis.line = element_line(colour = "black"), 
+              axis.title  = element_text(size = 17),
+              axis.title.x = element_text(margin = ggplot2::margin(t = 15)),
+              axis.title.y = element_text(margin = ggplot2::margin(r = 15)),
+              axis.text = element_text(size = 15),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              legend.title = element_blank(),
+              legend.text = element_text(size = 15),
+              legend.position = c(0.8, 0.85),
+              legend.justification = "center",
+              legend.box.background = element_rect(color = "gray25"))   
+
+M_Volcano
+
+png("4_OutputFigures/VolcanoMale.png", width = 5.5, height = 5.25, units = "in", res = 1200)
+M_Volcano
+invisible(dev.off())
+```
+
+And the females:
+```{r}
+# Select for females subjects
+F_FC <- Log2_FC_Sex %>% 
+   select(c(Protein_Name, F_Log2_FC, F_Pval))
+
+# add a column of NAs
+F_FC$diffexpressed <- "NS"
+
+# If FC > 0 and pvalue < 0.05, set as "Increased" 
+F_FC$diffexpressed[F_FC$F_Log2_FC > 0 & F_FC$F_Pval < 0.05] <- "Increased"
+
+# If log2Foldchange < 0 and pvalue < 0.05, set as "Decreased"
+F_FC$diffexpressed[F_FC$F_Log2_FC < 0 & F_FC$F_Pval < 0.05] <- "Decreased"
+
+# Now write Down the name of proteins beside the points...
+# Create a new column "delabel" to de, that will contain the name of proteins differentially expressed (NA in case they are not)
+F_FC$delabel <- NA
+F_FC$delabel[F_FC$diffexpressed != "NS"] <- F_FC$Protein_Name[F_FC$diffexpressed != "NS"]
+
+# Create the plot.
+F_Volcano <- F_FC %>% 
+  ggplot(
+    aes(x = F_Log2_FC, y = -log10(F_Pval), color = diffexpressed, label = delabel)) +
+        geom_point(alpha = 0.7) + 
+        scale_color_manual(values = c("blue", "red", "gray") , 
+                           breaks = c("Decreased", "Increased", "NS")) +
+        
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+        geom_label_repel(data = F_FC %>% filter(Protein_Name %in% prots_to_label_female),
+                         aes(color = diffexpressed),
+                        show.legend = FALSE,
+                        max.overlaps = 12,
+                        fill = "white",
+                        size = 5,
+                        label.r = 0.2,
+                        label.size = 0.5,
+                        min.segment.length = 0) + 
+
+        xlim(-2, 1.5) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 4)) +
+  
+        labs(y = bquote(~-Log[10]~'(p-value)'), 
+             x = bquote(~Log[2]~'(Fold Change)'),
+             title = "Females",
+             subtitle = "24 Hours Post vs. Pre") +
+      
+        theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+              plot.subtitle = element_text(size = 15, hjust = 0.5, face = "italic"),
+              axis.line = element_line(colour = "black"), 
+              axis.title  = element_text(size = 17),
+              axis.title.x = element_text(margin = ggplot2::margin(t = 15)),
+              axis.title.y = element_text(margin = ggplot2::margin(r = 15)),
+              axis.text = element_text(size = 15),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              legend.title = element_blank(),
+              legend.text = element_text(size = 15),
+              legend.position = c(0.8, 0.8),
+              legend.justification = "center",
+              legend.box.background = element_rect(color = "gray25"))   
+
+F_Volcano
+
+png("4_OutputFigures/VolcanoFemale.png", width = 5.5, height = 5.25, units = "in", res = 1200)
+F_Volcano
+invisible(dev.off())
+```
+
+For a plot of significant difference between males and females at baseline:
+```{r}
+# Prepare list of proteins to annotate
+pre_sex_prots_up <- proteomics_pre_sex_analysis %>% filter(p < 0.05) %>% filter(Log2FC_MvsF > 0) %>% slice_max(Log2FC_MvsF, n = 10) %>% pull("Protein_Name")
+pre_sex_prots_down <- proteomics_pre_sex_analysis %>% filter(p < 0.05) %>% filter(Log2FC_MvsF < 0) %>% pull("Protein_Name")
+pre_sex_prots <- c(pre_sex_prots_up, pre_sex_prots_down)
+
+# Prepare annotation for points
+proteomics_pre_sex_analysis <- proteomics_pre_sex_analysis %>%
+  mutate(diffexpressed = ifelse(p < 0.05 & Log2FC_MvsF > 0, "Increased", ifelse(p < 0.05 & Log2FC_MvsF < 0, "Decreased", "NS"))) %>%
+  mutate(delabel = ifelse(Protein_Name %in% pre_sex_prots, Protein_Name, NA))
+
+# Create the plot
+Sex_Volcano <- proteomics_pre_sex_analysis %>% 
+  ggplot(
+    aes(x = Log2FC_MvsF, y = -log10(p), color = diffexpressed, label = delabel)) +
+        geom_point(alpha = 0.7) + 
+        scale_color_manual(values = c("blue", "red", "gray") , 
+                           breaks = c("Decreased", "Increased", "NS")) +
+        
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+        geom_label_repel(data = proteomics_pre_sex_analysis %>% filter(Protein_Name %in% pre_sex_prots),
+                         aes(color = diffexpressed),
+                        show.legend = FALSE,
+                        max.overlaps = 12,
+                        fill = "white",
+                        size = 5,
+                        label.r = 0.2,
+                        label.size = 0.5,
+                        min.segment.length = 0) + 
+
+        xlim(-2, 1.5) +
+        scale_y_continuous(expand = c(0, 0), limits = c(0, 4)) +
+  
+        labs(y = bquote(~-Log[10]~'(p-value)'), 
+             x = bquote(~Log[2]~'(Fold Change)'),
+             title = "Males vs. Females",
+             subtitle = "Pre") +
+      
+        theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+              plot.subtitle = element_text(size = 15, hjust = 0.5, face = "italic"),
+              axis.line = element_line(colour = "black"), 
+              axis.title  = element_text(size = 17),
+              axis.title.x = element_text(margin = ggplot2::margin(t = 15)),
+              axis.title.y = element_text(margin = ggplot2::margin(r = 15)),
+              axis.text = element_text(size = 15),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              legend.title = element_blank(),
+              legend.text = element_text(size = 15),
+              legend.position = c(0.2, 0.85),
+              legend.justification = "center",
+              legend.box.background = element_rect(color = "gray25"))   
+
+Sex_Volcano
+
+png("4_OutputFigures/VolcanoSex.png", width = 5.5, height = 5.25, units = "in", res = 1200)
+Sex_Volcano
+invisible(dev.off())
+```
+
+
+## Euler Plot
+
+### Prepare data
+
+```{r}
+# Male subjects only
+FC_Male_Top <- Log2_FC_Sex[,1:6] # Select just the male cols
+FC_Male_Top <- FC_Male_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(M_Pval < 0.05) 
+
+# Female subjects only
+FC_Female_Top <- Log2_FC_Sex[,c(1,2, 7:10)] # Select just the female cols
+FC_Female_Top <- FC_Female_Top %>% # Select for proteins with pval <0.05 and order by the largest log2 FCs
+  filter(F_Pval < 0.05)
+```
+
+Comparison between the number of significantly altered proteins that overlapped between 'females', 'all', and "males" categories
+```{r}
+##### F VS ALL
+dim(FC_Female_Top) # Females: 368 significant proteins
+F_Down <- FC_Female_Top %>% filter(F_Log2_FC < 0) # Females: 368 significant down proteins
+Fe_Up <- FC_Female_Top %>% filter(F_Log2_FC > 0) # Females: 0 significant up proteins.
+
+All_Down <- Log2_FC_Top %>% filter(Log2_FC < 0) # All: 257 significant down proteins
+All_Up <- Log2_FC_Top %>% filter(Log2_FC > 0) # All: 1 significant up proteins.
+
+Both_Down.f <- merge(All_Down, F_Down) # 192 down proteins
+Both_Up.f <- merge(All_Up, Fe_Up) # 0 proteins...up proteins from each sex are unique
+
+##### M vs ALL
+M_Down <- FC_Male_Top %>% filter(M_Log2_FC < 0) # Males: 11 significant down proteins
+M_Up <- FC_Male_Top %>% filter(M_Log2_FC > 0) # Males: 16 significant up proteins.
+
+Both_Down.m <- merge(All_Down, M_Down) # 4 down proteins
+Both_Up.m <- merge(All_Up, M_Up) # 0 proteins...up proteins from each sex are unique
+
+###### F VS M
+Both_Down.f.m <- merge(M_Down, F_Down) # 0 down proteins overlap
+Both_Up.f.m <- merge(M_Up, Fe_Up) # 0 up proteins overlap
+
+```
+
+### Generate plot
+
+```{r}
+set.seed(8016)
+
+All_Sig <- euler(c(
+  "A" = 62, # all (258 all - 192 F overlap - 4 M overlap)
+  "B" = 176, # Fem (368F - 192 all overlap)
+  "C" = 23, # male (27M - 4 all overlap)
+  "A&B" = 192, # all & fem overlap
+  "B&C" = 0, # fem & male overlap
+  "C&A" = 4 # male & all overlap
+))
+
+png(file = "4_OutputFigures/EulerPlot.png",
+  width = 5.5,
+  height = 5.5,
+  units = "in",
+  res = 1200)
+
+v <- plot(All_Sig, 
+     labels = list(labels = c("All", "Females", "Males", "", ""), cex = 1.5),
+     edges = list(lty = 1:3),
+     fills = c("#CEA7FF", "lightpink","lightblue", "darkseagreen2", "#ECF266"),
+     alpha = 0.7,
+     quantities = list(type = "counts", cex = 1.5))
+
+tags <- v$children[[1]]$children[[1]]$children$tags$children
+
+tags <- do.call(grid::gList, lapply(tags, function(x) {
+  x$children[[2]]$label <- sub(" \\(", "\n(", x$children[[2]]$label)
+  x$children[[2]]$just <- NULL
+  x$children[[2]]$hjust <- 0.5
+  x$children[[2]]$vjust <- 1 
+  x}))
+
+v$children[[1]]$children[[1]]$children$tags$children <- tags
+
+v
+
+invisible(dev.off())
+```
+
+### Write out summary table of overlap results
+
+```{r}
+# Get proteins significant in the aggregate results
+sig_aggregate <- Log2_FC_Mean %>% 
+  filter(Pval < 0.05) %>% 
+  pull("Protein_Accession")
+
+sig_male <- Log2_FC_Sex %>% 
+  filter(M_Pval < 0.05) %>% 
+  pull("Protein_Accession")
+
+sig_female <- Log2_FC_Sex %>% 
+  filter(F_Pval < 0.05) %>% 
+  pull("Protein_Accession")
+
+# Get unique proteins
+sig_aggregate_df <- data.frame(Protein_Accession = setdiff(sig_aggregate, union(sig_male, sig_female)), Intersection = "All Only")
+sig_male_df <- data.frame(Protein_Accession = setdiff(sig_male, union(sig_aggregate, sig_female)), Intersection = "Male Only")
+sig_female_df <- data.frame(Protein_Accession = setdiff(sig_female, union(sig_aggregate, sig_male)), Intersection = "Female Only")
+
+# Get overlaps
+sig_aggregate_male_df <- data.frame(Protein_Accession = intersect(sig_aggregate, sig_male), Intersection = "All_Male")
+sig_aggregate_female_df <- data.frame(Protein_Accession = intersect(sig_aggregate, sig_female), Intersection = "All_Female")
+
+# Bind together
+overlap_summary <- rbind(sig_aggregate_df, sig_female_df, sig_male_df, sig_aggregate_male_df, sig_aggregate_female_df) %>%
+  left_join(Pval %>% select(c(Protein_Accession, Protein_Name)), by = "Protein_Accession") %>%
+  relocate(Protein_Name, .after = "Protein_Accession")
+
+# Write out
+write.xlsx(overlap_summary, "3_OutputTables/SupplementalTableS5_Proteomics_ProteinOverlap.xlsx")
+```
+
+
+
