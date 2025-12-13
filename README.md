@@ -6,7 +6,7 @@ This repository contains script associated with the manuscript "Exploratory anal
 
 The manuscript is available from the following websites:
 - [Toxicological Sciences](https://academic.oup.com/toxsci/advance-article/doi/10.1093/toxsci/kfaf150/8300995)
-- [PubMed] (upload pending)
+- [PubMed] (https://pubmed.ncbi.nlm.nih.gov/41134656/)
 
 The analysis is subdivided into five scripts:
 
